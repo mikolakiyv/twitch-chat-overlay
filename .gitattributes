@@ -1,0 +1,4 @@
+# батник обязан остаться CP866 + CRLF — никакой конвертации
+*.bat -text
+*.ico binary
+*.png binary

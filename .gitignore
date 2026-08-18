@@ -1,0 +1,15 @@
+# личные настройки (содержат каналы и зашифрованный токен)
+overlay_config.json
+
+# кэши картинок
+.emote_cache/
+.badge_cache/
+.7tv_cache/
+
+# сборка
+__pycache__/
+*.zip
+TwitchChatOverlay.exe
+build/
+dist/
+*.spec
