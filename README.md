@@ -15,7 +15,7 @@
 
 | Только текст (F9) | Настройки |
 |:---:|:---:|
-| <img src="docs/screenshot_textonly.png" width="330"> | <img src="docs/screenshot_settings.png" width="300"> |
+| <img src="docs/screenshot_textonly.png" width="330"> | <img src="docs/settings-panel.png" width="300"> |
 
 </div>
 
