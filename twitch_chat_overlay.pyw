@@ -27,6 +27,8 @@ import re
 import socket
 import sys
 import threading
+import urllib.error
+import urllib.parse
 import urllib.request
 import webbrowser
 import zlib
@@ -638,40 +640,118 @@ def fetch_badge_maps(channels):
     return maps, ids
 
 
-def fetch_7tv_maps(channels, twitch_ids):
-    """Карты смайлов 7TV: {'global': {имя: id}, канал: {имя: id}}."""
-    maps = {}
+# Липкие индексы рабочих маршрутов 7TV: если прямой домен заблокирован
+# провайдером (актуально для РФ), запоминаем зеркало и ходим через него
+SEVENTV_ROUTE = {"api": 0, "cdn": 0}
+SEVENTV_MAPS_CACHE = os.path.join(SEVENTV_CACHE_DIR, "_maps.json")
 
-    def load(url):
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read().decode("utf-8"))
 
+def _rotated(n, start):
+    return list(range(start, n)) + list(range(0, start))
+
+
+def fetch_7tv_json(path):
+    """JSON из API 7TV: прямой домен → альтернативный → публичные прокси."""
+    direct = "https://7tv.io/v3/" + path
+    urls = [
+        direct,
+        "https://api.7tv.app/v3/" + path,
+        "https://api.allorigins.win/raw?url=" + urllib.parse.quote(direct, safe=""),
+        "https://api.codetabs.com/v1/proxy?quest=" + urllib.parse.quote(direct, safe=""),
+    ]
+    last = None
+    for i in _rotated(len(urls), SEVENTV_ROUTE["api"]):
+        try:
+            req = urllib.request.Request(urls[i], headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=6 if i < 2 else 9) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            SEVENTV_ROUTE["api"] = i
+            return data
+        except urllib.error.HTTPError as e:
+            if e.code in (400, 404):
+                return None  # канала нет в 7TV — это не сетевая проблема
+            last = e
+        except Exception as e:
+            last = e
+    dbg("! 7tv api, все маршруты:", last)
+    return "unreachable"
+
+
+def _load_7tv_maps_cache():
     try:
-        g = load("https://7tv.io/v3/emote-sets/global")
+        with open(SEVENTV_MAPS_CACHE, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_7tv_maps_cache(maps):
+    try:
+        os.makedirs(SEVENTV_CACHE_DIR, exist_ok=True)
+        with open(SEVENTV_MAPS_CACHE, "w", encoding="utf-8") as f:
+            json.dump(maps, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def fetch_7tv_maps(channels, twitch_ids):
+    """Карты смайлов 7TV: {'global': {имя: id}, канал: {имя: id}}.
+
+    Если API недоступен даже через зеркала, берём последние удачные карты
+    с диска — смайлы продолжают работать при блокировке 7TV у провайдера.
+    """
+    cached = _load_7tv_maps_cache()
+    maps = {"global": {}}
+    g = fetch_7tv_json("emote-sets/global")
+    if isinstance(g, dict):
         maps["global"] = {e["name"]: e["id"] for e in (g.get("emotes") or [])
                           if e.get("name") and e.get("id")}
-    except Exception as e:
-        dbg("! 7tv global:", e)
-        maps["global"] = {}
+    elif g == "unreachable" and isinstance(cached.get("global"), dict):
+        maps["global"] = cached["global"]
+        dbg("7tv global: из дискового кэша")
     for ch in channels:
         tid = twitch_ids.get(ch)
         if not tid:
             continue
-        try:
-            u = load("https://7tv.io/v3/users/twitch/%s" % tid)
+        u = fetch_7tv_json("users/twitch/%s" % tid)
+        if isinstance(u, dict):
             es = (u.get("emote_set") or {}).get("emotes") or []
             maps[ch] = {e["name"]: e["id"] for e in es if e.get("name") and e.get("id")}
             dbg("7tv %s: %d emotes" % (ch, len(maps[ch])))
-        except Exception as e:
-            dbg("! 7tv %s:" % ch, e)  # канал не зарегистрирован в 7TV — это нормально
+        elif u == "unreachable" and isinstance(cached.get(ch), dict):
+            maps[ch] = cached[ch]
+            dbg("7tv %s: из дискового кэша" % ch)
+    merged = dict(cached)
+    merged.update({k: v for k, v in maps.items() if v})
+    _save_7tv_maps_cache(merged)
     return maps
 
 
-def fetch_7tv_image(eid):
-    """Скачивает смайл 7TV (webp), конвертирует в PNG высотой 28px. base64 или None."""
+def _webp_to_png(raw):
+    """webp -> PNG высотой 28px (нужен Pillow)."""
     if not HAS_PIL:
         return None
+    try:
+        img = _PILImage.open(_io.BytesIO(raw))
+        img.seek(0)  # у анимированных берём первый кадр
+        img = img.convert("RGBA")
+        if img.height > 28:
+            img = img.resize((max(1, round(img.width * 28 / img.height)), 28),
+                             _PILImage.LANCZOS)
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+def fetch_7tv_image(eid):
+    """Смайл 7TV как PNG 28px: прямой CDN → зеркала-конвертеры. base64 или None.
+
+    Зеркала wsrv.nl / images.weserv.nl сами конвертируют webp в PNG, поэтому
+    работают даже без Pillow и при блокировке cdn.7tv.app у провайдера.
+    """
     eid = re.sub(r"[^A-Za-z0-9]", "", eid)
     if not eid:
         return None
@@ -680,30 +760,49 @@ def fetch_7tv_image(eid):
         return cached
     data = None
     path = os.path.join(SEVENTV_CACHE_DIR, eid + ".png")
-    try:
-        if os.path.isfile(path):
+    if os.path.isfile(path):
+        try:
             with open(path, "rb") as f:
                 data = base64.b64encode(f.read()).decode("ascii")
-        else:
-            url = "https://cdn.7tv.app/emote/%s/1x.webp" % eid
+            SEVENTV_IMG_CACHE.put(eid, data)
+            return data
+        except OSError:
+            pass
+    cdn = "cdn.7tv.app/emote/%s/1x.webp" % eid
+    q = urllib.parse.quote(cdn, safe="")
+    routes = [
+        ("https://" + cdn, True),                                      # webp + Pillow
+        ("https://wsrv.nl/?url=%s&output=png&h=28" % q, False),        # готовый PNG
+        ("https://images.weserv.nl/?url=%s&output=png&h=28" % q, False),
+        ("https://api.allorigins.win/raw?url=" +
+         urllib.parse.quote("https://" + cdn, safe=""), True),
+    ]
+    png = None
+    for i in _rotated(len(routes), SEVENTV_ROUTE["cdn"]):
+        url, needs_pil = routes[i]
+        if needs_pil and not HAS_PIL:
+            continue
+        try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=6) as r:
+            with urllib.request.urlopen(req, timeout=6 if i == 0 else 9) as r:
                 raw = r.read()
-            img = _PILImage.open(_io.BytesIO(raw))
-            img.seek(0)  # у анимированных берём первый кадр
-            img = img.convert("RGBA")
-            if img.height > 28:
-                img = img.resize((max(1, round(img.width * 28 / img.height)), 28),
-                                 _PILImage.LANCZOS)
-            buf = _io.BytesIO()
-            img.save(buf, format="PNG")
-            png = buf.getvalue()
+        except urllib.error.HTTPError as e:
+            if i == 0 and e.code == 404:
+                break  # такого смайла нет — зеркала не помогут
+            continue
+        except Exception:
+            continue
+        png = raw if raw.startswith(b"\x89PNG") else _webp_to_png(raw)
+        if png:
+            SEVENTV_ROUTE["cdn"] = i
+            break
+    if png:
+        try:
             os.makedirs(SEVENTV_CACHE_DIR, exist_ok=True)
             write_cache_file(path, png)
-            data = base64.b64encode(png).decode("ascii")
-    except Exception as e:
-        dbg("! 7tv img:", e)
-        data = None
+        except OSError:
+            pass
+        data = base64.b64encode(png).decode("ascii")
     SEVENTV_IMG_CACHE.put(eid, data)
     return data
 
@@ -948,14 +1047,13 @@ class IrcThread(threading.Thread):
             eid = re.sub(r"[^A-Za-z0-9_-]", "", part.partition(":")[0])
             if eid and eid not in EMOTE_CACHE:
                 jobs.append(lambda e=eid: fetch_emote(e))
-        if HAS_PIL:
-            cm = self.seventv_maps.get(channel) or {}
-            gm = self.seventv_maps.get("global") or {}
-            if cm or gm:
-                for w in set(text.split()):
-                    sid = cm.get(w) or gm.get(w)
-                    if sid and re.sub(r"[^A-Za-z0-9]", "", sid) not in SEVENTV_IMG_CACHE:
-                        jobs.append(lambda s=sid: fetch_7tv_image(s))
+        cm = self.seventv_maps.get(channel) or {}
+        gm = self.seventv_maps.get("global") or {}
+        if cm or gm:
+            for w in set(text.split()):
+                sid = cm.get(w) or gm.get(w)
+                if sid and re.sub(r"[^A-Za-z0-9]", "", sid) not in SEVENTV_IMG_CACHE:
+                    jobs.append(lambda s=sid: fetch_7tv_image(s))
         for _b, url in badge_urls_for(self.badge_maps, channel, badges_tag):
             if url not in BADGE_IMG_CACHE:
                 jobs.append(lambda u=url: fetch_badge_image(u))
@@ -964,8 +1062,6 @@ class IrcThread(threading.Thread):
 
     def _apply_7tv(self, segs, channel):
         """Заменяет слова-смайлы 7TV в текстовых кусках на картинки."""
-        if not HAS_PIL:
-            return segs
         cm = self.seventv_maps.get(channel) or {}
         gm = self.seventv_maps.get("global") or {}
         if not cm and not gm:
@@ -1381,8 +1477,6 @@ class OverlayApp:
         self.connect(cfg["channels"])
         self.sys_message(T("hint_start", cfg["key_clickthrough"]["name"],
                            cfg["key_frameless"]["name"]))
-        if not HAS_PIL:
-            self.sys_message(T("pil_off"))
         self.poll_queue()
         self.poll_keys()
         self.keep_topmost()
