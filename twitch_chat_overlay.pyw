@@ -123,6 +123,7 @@ DEFAULTS = {
     "theme": "twitch",
     "lang": "ru",
     "active_tab": "*",
+    "animations": True,
     "key_clickthrough": {"vk": 119, "name": "F8"},
     "key_frameless": {"vk": 120, "name": "F9"},
     "max_messages": 150,
@@ -150,6 +151,7 @@ STRINGS = {
         "s_about": "О программе",
         "mention_saved": "Упоминания: @%s",
         "tab_all": "Все",
+        "s_anim": "Анимация смайлов",
         "pil_off": "Смайлы 7TV выключены: нет пакета Pillow. Запустите через батник — установит сам.",
         "connecting": "Подключение к Twitch…",
         "reconnecting": "Переподключение…",
@@ -238,6 +240,7 @@ STRINGS = {
         "s_about": "About",
         "mention_saved": "Mentions: @%s",
         "tab_all": "All",
+        "s_anim": "Animated emotes",
         "pil_off": "7TV emotes disabled: Pillow package missing. Run the .bat — it installs it.",
         "connecting": "Connecting to Twitch…",
         "reconnecting": "Reconnecting…",
@@ -1442,6 +1445,7 @@ class OverlayApp:
         self.topmost = tk.BooleanVar(value=True)
         self.theme_var = tk.StringVar(value=cfg.get("theme", "twitch"))
         self.lang_var = tk.StringVar(value=cfg.get("lang", "ru"))
+        self.anim_enabled = tk.BooleanVar(value=bool(cfg.get("animations", True)))
         self.settings_win = None
 
         root.overrideredirect(True)
@@ -1685,6 +1689,9 @@ class OverlayApp:
         self._fs_lbl = tk.Label(r, text=str(int(self.cfg.get("font_size", 11))),
                                 bg=BG, fg=SYS_FG, font=lbl_font, width=5, anchor="e")
         self._fs_lbl.pack(side="left")
+
+        tk.Checkbutton(row(), text=T("s_anim"), variable=self.anim_enabled,
+                       command=self.toggle_animations, **chk).pack(side="left")
 
         rb = dict(bg=BG, fg=FG, activebackground=BG, activeforeground=FG,
                   selectcolor=ENTRY_BG, font=lbl_font, highlightthickness=0,
@@ -2336,7 +2343,7 @@ class OverlayApp:
                 img = tk.PhotoImage(data=b64)
             except tk.TclError:
                 img = None
-        if img is not None and anim:
+        if img is not None and anim and self.anim_enabled.get():
             frames, delays = self._build_frames(anim)
             if len(frames) > 1:
                 if len(self._anim) >= 40:  # потолок одновременных анимаций
@@ -2366,9 +2373,28 @@ class OverlayApp:
             delays = [80] * len(frames)
         return frames, delays
 
+    def toggle_animations(self):
+        on = bool(self.anim_enabled.get())
+        self.cfg["animations"] = on
+        save_config(self.cfg)
+        if not on:
+            # аккуратно замираем на первом кадре
+            for st in self._anim.values():
+                st["i"] = 0
+                st["left"] = st["delays"][0]
+                try:
+                    m = st["master"]
+                    m.tk.call(str(m), "copy", str(st["frames"][0]),
+                              "-compositingrule", "set")
+                except tk.TclError:
+                    pass
+
     def _animate(self):
         # один тик двигает все анимированные смайлы: кадр копируется в мастер,
         # и Tk сам перерисовывает каждое его вхождение в лентах
+        if not self.anim_enabled.get():
+            self.root.after(200, self._animate)
+            return
         for st in self._anim.values():
             st["left"] -= 50
             if st["left"] <= 0:

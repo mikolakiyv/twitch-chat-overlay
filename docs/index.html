@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Twitch Chat Overlay — чат поверх любых окон и игр</title>
+<meta name="description" content="Лёгкий оверлей чата Twitch для Windows: поверх всех окон, вкладки каналов, смайлы 7TV с анимацией, упоминания, отправка сообщений. Бесплатно, open source.">
+<meta property="og:title" content="Twitch Chat Overlay">
+<meta property="og:description" content="Чат Twitch поверх любых окон и игр. Смайлы 7TV, вкладки, упоминания. Бесплатно, open source.">
+<meta property="og:image" content="https://mikolakiyv.github.io/twitch-chat-overlay/screenshot_main.png">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%239147ff'/><rect x='18' y='24' width='64' height='38' rx='10' fill='white'/><path d='M30 58 L52 58 L34 78 Z' fill='white'/><circle cx='35' cy='43' r='4.5' fill='%239147ff'/><circle cx='50' cy='43' r='4.5' fill='%239147ff'/><circle cx='65' cy='43' r='4.5' fill='%239147ff'/></svg>">
+<style>
+  :root {
+    --bg: #0f0f12; --panel: #17171a; --panel2: #1e1e22; --border: #2e2e35;
+    --fg: #efeff1; --muted: #a3a3ab; --accent: #9147ff; --accent2: #772ce8;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: radial-gradient(1200px 600px at 50% -100px, #241a3a 0%, var(--bg) 55%);
+    color: var(--fg); font-family: "Segoe UI", system-ui, sans-serif; line-height: 1.55;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 48px 20px 40px; }
+  header { text-align: center; margin-bottom: 36px; }
+  .logo { width: 88px; height: 88px; border-radius: 22px; margin-bottom: 18px; }
+  h1 { font-size: 2.4rem; letter-spacing: -.5px; }
+  .tag { color: var(--muted); font-size: 1.12rem; margin-top: 8px; }
+  .tag b { color: var(--fg); }
+  .btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin: 26px 0 8px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px; padding: 13px 26px;
+    border-radius: 999px; text-decoration: none; font-weight: 600; font-size: 1.02rem;
+    transition: transform .12s, background .12s;
+  }
+  .btn:hover { transform: translateY(-2px); }
+  .btn-main { background: var(--accent); color: #fff; box-shadow: 0 6px 24px rgba(145,71,255,.35); }
+  .btn-main:hover { background: var(--accent2); }
+  .btn-ghost { background: var(--panel2); color: var(--fg); border: 1px solid var(--border); }
+  .note { color: var(--muted); font-size: .86rem; text-align: center; }
+  .note a { color: var(--accent); }
+  .shots { display: grid; grid-template-columns: 1.35fr 1fr; gap: 14px; margin: 38px 0; }
+  .shots img {
+    width: 100%; border-radius: 14px; border: 1px solid var(--border); display: block;
+    background: var(--panel);
+  }
+  .shots .col { display: flex; flex-direction: column; gap: 14px; }
+  .features {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px; margin: 8px 0 38px;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+    padding: 16px 18px;
+  }
+  .card b { display: block; margin-bottom: 4px; }
+  .card span { color: var(--muted); font-size: .95rem; }
+  h2 { font-size: 1.35rem; margin: 34px 0 14px; }
+  .how { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 20px 22px; }
+  .how ol { margin-left: 22px; }
+  .how li { margin: 6px 0; }
+  .how .warn { color: var(--muted); font-size: .92rem; margin-top: 12px; }
+  footer { text-align: center; color: var(--muted); margin-top: 44px; font-size: .95rem; }
+  footer a { color: var(--accent); text-decoration: none; }
+  .heart { color: #ff6bd6; }
+  @media (max-width: 720px) { .shots { grid-template-columns: 1fr; } h1 { font-size: 1.9rem; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <svg class="logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" rx="22" fill="#9147ff"/><rect x="18" y="24" width="64" height="38" rx="10" fill="white"/><path d="M30 58 L52 58 L34 78 Z" fill="white"/><circle cx="35" cy="43" r="4.5" fill="#9147ff"/><circle cx="50" cy="43" r="4.5" fill="#9147ff"/><circle cx="65" cy="43" r="4.5" fill="#9147ff"/></svg>
+  <h1>Twitch Chat Overlay</h1>
+  <p class="tag">Чат Twitch <b>поверх любых окон и игр</b> · смайлы 7TV с анимацией · вкладки каналов<br>
+  <span style="font-size:.95rem">Lightweight always-on-top Twitch chat overlay for Windows</span></p>
+
+  <div class="btns">
+    <a class="btn btn-main" href="https://github.com/mikolakiyv/twitch-chat-overlay/releases/latest/download/TwitchChatOverlay.exe">
+      ⬇&nbsp;Скачать для Windows&nbsp;·&nbsp;.exe
+    </a>
+    <a class="btn btn-ghost" href="https://github.com/mikolakiyv/twitch-chat-overlay/releases/latest/download/twitch-chat-overlay.zip">исходники .zip</a>
+    <a class="btn btn-ghost" href="https://github.com/mikolakiyv/twitch-chat-overlay">GitHub ★</a>
+  </div>
+  <p class="note">Бесплатно · без установки · open source (MIT) · Windows 10/11</p>
+</header>
+
+<div class="shots">
+  <img src="screenshot_main.png" alt="Оверлей поверх игры: вкладки каналов, значки, смайлы 7TV">
+  <div class="col">
+    <img src="screenshot_textonly.png" alt="Режим «только текст» — парящий чат без рамки и фона">
+    <img src="screenshot_settings.png" alt="Все настройки на одном экране">
+  </div>
+</div>
+
+<div class="features">
+  <div class="card"><b>📌 Поверх всего</b><span>держится над играми и приложениями; для игр — режим «оконный без рамки»</span></div>
+  <div class="card"><b>👻 Только текст — F9</b><span>убирает рамку и фон: парящий чат поверх игры, клики проходят насквозь</span></div>
+  <div class="card"><b>😀 Смайлы Twitch и 7TV</b><span>анимированные двигаются как в чате; работают в РФ без VPN через зеркала</span></div>
+  <div class="card"><b>🗂 Несколько каналов</b><span>общий поток «Все» + вкладка на каждый канал</span></div>
+  <div class="card"><b>🏅 Как настоящий чат</b><span>цвета ников, значки модеров/VIP/сабов, клик по нику открывает профиль</span></div>
+  <div class="card"><b>✍️ Отправка сообщений</b><span>войдите через Twitch и пишите в чат прямо из оверлея</span></div>
+  <div class="card"><b>💜 Упоминания</b><span>тегнули — сообщение подсветится, окно мигнёт</span></div>
+  <div class="card"><b>⚙️ Всё настраивается</b><span>прозрачность от 30%, темы, бинды, размер, RU/EN — на одном экране</span></div>
+</div>
+
+<h2>Как запустить</h2>
+<div class="how">
+  <ol>
+    <li>Скачайте <b>TwitchChatOverlay.exe</b> кнопкой выше — устанавливать ничего не нужно.</li>
+    <li>Запустите и введите название канала (можно несколько через запятую).</li>
+    <li>Готово: перетаскивайте за верхнюю полосу, правый клик или ⚙ — настройки, <b>F9</b> — только текст, <b>F8</b> — сквозные клики.</li>
+  </ol>
+  <p class="warn">⚠️ Windows SmartScreen при первом запуске: <b>«Подробнее» → «Выполнить в любом случае»</b> — стандартное предупреждение для программ без платной цифровой подписи. Код открыт, можно проверить на GitHub.</p>
+</div>
+
+<footer>
+  <p>Сделано <a href="https://twitch.tv/aliveenjoyer">aliveenjoyer</a> ·
+  <a href="https://www.donationalerts.com/r/nihaoenjoyer"><span class="heart">💜</span> поддержать разработку</a> ·
+  <a href="https://github.com/mikolakiyv/twitch-chat-overlay/blob/main/LICENSE">MIT License</a></p>
+</footer>
+
+</div>
+</body>
+</html>
