@@ -382,6 +382,10 @@ class LruDict:
             while len(self._d) > self.cap:
                 del self._d[next(iter(self._d))]
 
+    def pop(self, k):
+        with self._lock:
+            self._d.pop(k, None)
+
 
 EMOTE_CACHE = LruDict(300)        # id -> base64 PNG или None (не удалось скачать)
 BADGE_IMG_CACHE = LruDict(300)    # url -> base64 PNG или None
@@ -571,8 +575,46 @@ def readable_color(hex_color, login=""):
     return "#%02x%02x%02x" % (r, g, b)
 
 
+def _decode_frames(raw, target_h=None):
+    """Pillow: анимация (gif/webp) -> (кадры PNG base64, задержки мс)."""
+    frames, delays = [], []
+    img = _PILImage.open(_io.BytesIO(raw))
+    n = getattr(img, "n_frames", 1)
+    step = max(1, (n + 49) // 50)  # не больше ~50 кадров
+    for i in range(0, n, step):
+        img.seek(i)
+        fr = img.convert("RGBA")
+        if target_h and fr.height > target_h:
+            fr = fr.resize((max(1, round(fr.width * target_h / fr.height)), target_h),
+                           _PILImage.LANCZOS)
+        buf = _io.BytesIO()
+        fr.save(buf, format="PNG")
+        frames.append(base64.b64encode(buf.getvalue()).decode("ascii"))
+        d = img.info.get("duration", 80)
+        delays.append(max(40, min(500, int(d) * step if d else 80)))
+    return frames, delays
+
+
+def _payload_animated(raw, is_gif, target_h=None):
+    """Оригинал анимации -> payload {'master': b64, 'anim': ...} для отрисовки."""
+    b64 = base64.b64encode(raw).decode("ascii")
+    if HAS_PIL:
+        try:
+            frames, delays = _decode_frames(raw, target_h)
+            if len(frames) > 1:
+                return {"master": frames[0], "anim": ("frames", frames, delays)}
+            if frames:
+                return {"master": frames[0], "anim": None}
+        except Exception as e:
+            dbg("! anim decode:", e)
+    if is_gif:
+        # tkinter умеет GIF сам: мастер — кадр 0, кадры достанем по -index
+        return {"master": b64, "anim": ("gif", b64)}
+    return None
+
+
 def fetch_emote(eid):
-    """Скачивает смайлик (PNG, 28px) с кэшем на диске. Возвращает base64 или None."""
+    """Смайл Twitch (28px, анимированные — с кадрами). Кэш на диске. payload или None."""
     eid = re.sub(r"[^A-Za-z0-9_-]", "", eid)
     if not eid:
         return None
@@ -580,19 +622,28 @@ def fetch_emote(eid):
     if cached is not _MISS:
         return cached
     data = None
-    path = os.path.join(CACHE_DIR, eid + ".png")
+    png_path = os.path.join(CACHE_DIR, eid + ".png")
+    gif_path = os.path.join(CACHE_DIR, eid + ".gif")
     try:
-        if os.path.isfile(path):
-            with open(path, "rb") as f:
-                data = base64.b64encode(f.read()).decode("ascii")
+        if os.path.isfile(gif_path):
+            with open(gif_path, "rb") as f:
+                data = _payload_animated(f.read(), True, 28)
+        elif os.path.isfile(png_path):
+            with open(png_path, "rb") as f:
+                data = {"master": base64.b64encode(f.read()).decode("ascii"), "anim": None}
         else:
-            url = "https://static-cdn.jtvnw.net/emoticons/v2/%s/static/dark/1.0" % eid
+            # format=default: статичные приходят PNG, анимированные — GIF
+            url = "https://static-cdn.jtvnw.net/emoticons/v2/%s/default/dark/1.0" % eid
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=6) as r:
                 raw = r.read()
             os.makedirs(CACHE_DIR, exist_ok=True)
-            write_cache_file(path, raw)
-            data = base64.b64encode(raw).decode("ascii")
+            if raw[:6] in (b"GIF87a", b"GIF89a"):
+                write_cache_file(gif_path, raw)
+                data = _payload_animated(raw, True, 28)
+            else:
+                write_cache_file(png_path, raw)
+                data = {"master": base64.b64encode(raw).decode("ascii"), "anim": None}
     except Exception:
         data = None
     EMOTE_CACHE.put(eid, data)
@@ -644,6 +695,7 @@ def fetch_badge_maps(channels):
 # провайдером (актуально для РФ), запоминаем зеркало и ходим через него
 SEVENTV_ROUTE = {"api": 0, "cdn": 0}
 SEVENTV_MAPS_CACHE = os.path.join(SEVENTV_CACHE_DIR, "_maps.json")
+SEVENTV_ANIMATED = set()  # id анимированных смайлов (из API, живёт и в кэше карт)
 
 
 def _rotated(n, start):
@@ -702,11 +754,31 @@ def fetch_7tv_maps(channels, twitch_ids):
     с диска — смайлы продолжают работать при блокировке 7TV у провайдера.
     """
     cached = _load_7tv_maps_cache()
+
+    def mark_animated(sid):
+        # смайл мог уже закэшироваться статичным до загрузки карт —
+        # выбрасываем из памяти, чтобы перекачался с кадрами
+        if sid not in SEVENTV_ANIMATED:
+            SEVENTV_ANIMATED.add(sid)
+            SEVENTV_IMG_CACHE.pop(sid)
+
+    for sid in cached.get("_animated") or []:
+        mark_animated(sid)
+
+    def collect(emotes):
+        out = {}
+        for e in emotes or []:
+            if not (e.get("name") and e.get("id")):
+                continue
+            out[e["name"]] = e["id"]
+            if (e.get("data") or {}).get("animated"):
+                mark_animated(e["id"])
+        return out
+
     maps = {"global": {}}
     g = fetch_7tv_json("emote-sets/global")
     if isinstance(g, dict):
-        maps["global"] = {e["name"]: e["id"] for e in (g.get("emotes") or [])
-                          if e.get("name") and e.get("id")}
+        maps["global"] = collect(g.get("emotes"))
     elif g == "unreachable" and isinstance(cached.get("global"), dict):
         maps["global"] = cached["global"]
         dbg("7tv global: из дискового кэша")
@@ -716,41 +788,24 @@ def fetch_7tv_maps(channels, twitch_ids):
             continue
         u = fetch_7tv_json("users/twitch/%s" % tid)
         if isinstance(u, dict):
-            es = (u.get("emote_set") or {}).get("emotes") or []
-            maps[ch] = {e["name"]: e["id"] for e in es if e.get("name") and e.get("id")}
+            maps[ch] = collect((u.get("emote_set") or {}).get("emotes"))
             dbg("7tv %s: %d emotes" % (ch, len(maps[ch])))
         elif u == "unreachable" and isinstance(cached.get(ch), dict):
             maps[ch] = cached[ch]
             dbg("7tv %s: из дискового кэша" % ch)
     merged = dict(cached)
     merged.update({k: v for k, v in maps.items() if v})
+    merged["_animated"] = sorted(SEVENTV_ANIMATED)
     _save_7tv_maps_cache(merged)
     return maps
 
 
-def _webp_to_png(raw):
-    """webp -> PNG высотой 28px (нужен Pillow)."""
-    if not HAS_PIL:
-        return None
-    try:
-        img = _PILImage.open(_io.BytesIO(raw))
-        img.seek(0)  # у анимированных берём первый кадр
-        img = img.convert("RGBA")
-        if img.height > 28:
-            img = img.resize((max(1, round(img.width * 28 / img.height)), 28),
-                             _PILImage.LANCZOS)
-        buf = _io.BytesIO()
-        img.save(buf, format="PNG")
-        return buf.getvalue()
-    except Exception:
-        return None
-
-
 def fetch_7tv_image(eid):
-    """Смайл 7TV как PNG 28px: прямой CDN → зеркала-конвертеры. base64 или None.
+    """Смайл 7TV (28px, анимированные — с кадрами): прямой CDN → зеркала.
 
-    Зеркала wsrv.nl / images.weserv.nl сами конвертируют webp в PNG, поэтому
-    работают даже без Pillow и при блокировке cdn.7tv.app у провайдера.
+    Зеркала wsrv.nl / images.weserv.nl сами конвертируют webp (в PNG или
+    анимированный GIF), поэтому работают даже без Pillow и при блокировке
+    cdn.7tv.app у провайдера. Возвращает payload или None.
     """
     eid = re.sub(r"[^A-Za-z0-9]", "", eid)
     if not eid:
@@ -758,29 +813,40 @@ def fetch_7tv_image(eid):
     cached = SEVENTV_IMG_CACHE.get(eid, _MISS)
     if cached is not _MISS:
         return cached
+    animated = eid in SEVENTV_ANIMATED
     data = None
-    path = os.path.join(SEVENTV_CACHE_DIR, eid + ".png")
-    if os.path.isfile(path):
-        try:
-            with open(path, "rb") as f:
-                data = base64.b64encode(f.read()).decode("ascii")
-            SEVENTV_IMG_CACHE.put(eid, data)
-            return data
-        except OSError:
-            pass
+    png_path = os.path.join(SEVENTV_CACHE_DIR, eid + ".png")
+    webp_path = os.path.join(SEVENTV_CACHE_DIR, eid + ".webp")
+    gif_path = os.path.join(SEVENTV_CACHE_DIR, eid + ".gif")
+    try:
+        if HAS_PIL and os.path.isfile(webp_path):
+            with open(webp_path, "rb") as f:
+                data = _payload_animated(f.read(), False, 28)
+        elif os.path.isfile(gif_path):
+            with open(gif_path, "rb") as f:
+                data = _payload_animated(f.read(), True, 28)
+        elif os.path.isfile(png_path) and not animated:
+            with open(png_path, "rb") as f:
+                data = {"master": base64.b64encode(f.read()).decode("ascii"), "anim": None}
+    except OSError:
+        data = None
+    if data is not None:
+        SEVENTV_IMG_CACHE.put(eid, data)
+        return data
+
     cdn = "cdn.7tv.app/emote/%s/1x.webp" % eid
     q = urllib.parse.quote(cdn, safe="")
+    mirror_fmt = "gif&n=-1" if animated else "png"
     routes = [
-        ("https://" + cdn, True),                                      # webp + Pillow
-        ("https://wsrv.nl/?url=%s&output=png&h=28" % q, False),        # готовый PNG
-        ("https://images.weserv.nl/?url=%s&output=png&h=28" % q, False),
+        ("https://" + cdn, "webp"),  # оригинал (нужен Pillow)
+        ("https://wsrv.nl/?url=%s&output=%s&h=28" % (q, mirror_fmt), "ready"),
+        ("https://images.weserv.nl/?url=%s&output=%s&h=28" % (q, mirror_fmt), "ready"),
         ("https://api.allorigins.win/raw?url=" +
-         urllib.parse.quote("https://" + cdn, safe=""), True),
+         urllib.parse.quote("https://" + cdn, safe=""), "webp"),
     ]
-    png = None
     for i in _rotated(len(routes), SEVENTV_ROUTE["cdn"]):
-        url, needs_pil = routes[i]
-        if needs_pil and not HAS_PIL:
+        url, kind = routes[i]
+        if kind == "webp" and not HAS_PIL:
             continue
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -792,17 +858,25 @@ def fetch_7tv_image(eid):
             continue
         except Exception:
             continue
-        png = raw if raw.startswith(b"\x89PNG") else _webp_to_png(raw)
-        if png:
+        payload, save_path = None, None
+        if raw.startswith(b"\x89PNG"):
+            payload = {"master": base64.b64encode(raw).decode("ascii"), "anim": None}
+            save_path = png_path
+        elif raw[:6] in (b"GIF87a", b"GIF89a"):
+            payload = _payload_animated(raw, True, 28)
+            save_path = gif_path
+        elif raw[:4] == b"RIFF":  # webp
+            payload = _payload_animated(raw, False, 28)
+            save_path = webp_path
+        if payload:
+            data = payload
             SEVENTV_ROUTE["cdn"] = i
+            try:
+                os.makedirs(SEVENTV_CACHE_DIR, exist_ok=True)
+                write_cache_file(save_path, raw)
+            except OSError:
+                pass
             break
-    if png:
-        try:
-            os.makedirs(SEVENTV_CACHE_DIR, exist_ok=True)
-            write_cache_file(path, png)
-        except OSError:
-            pass
-        data = base64.b64encode(png).decode("ascii")
     SEVENTV_IMG_CACHE.put(eid, data)
     return data
 
@@ -1347,6 +1421,7 @@ class OverlayApp:
         self.q = queue.Queue()
         self.irc = None
         self.images = LruDict(600)  # ключ -> PhotoImage; LRU, чтобы память не росла
+        self._anim = {}             # ключ -> состояние анимации смайла
         self.known_tags = set()
         self._mention_re = None
         self._mention_name = ""
@@ -1480,6 +1555,7 @@ class OverlayApp:
         self.poll_queue()
         self.poll_keys()
         self.keep_topmost()
+        self._animate()
 
     # ---------- меню ----------
 
@@ -2236,18 +2312,75 @@ class OverlayApp:
             w._ctags.add(tag)
         return tag
 
-    def cached_image(self, key, b64):
+    def cached_image(self, key, payload):
+        """PhotoImage по ключу; payload — b64-строка (значки) или dict (смайлы).
+
+        Анимированные регистрируются в self._anim: один общий PhotoImage
+        обновляется кадрами, и все его копии во всех лентах двигаются сами.
+        """
+        st = self._anim.get(key)
+        if st is not None:
+            return st["master"]
         img = self.images.get(key, _MISS)
         if img is not _MISS:
             return img
+        b64, anim = None, None
+        if isinstance(payload, str):
+            b64 = payload
+        elif isinstance(payload, dict):
+            b64 = payload.get("master")
+            anim = payload.get("anim")
         img = None
         if b64:
             try:
                 img = tk.PhotoImage(data=b64)
             except tk.TclError:
                 img = None
+        if img is not None and anim:
+            frames, delays = self._build_frames(anim)
+            if len(frames) > 1:
+                if len(self._anim) >= 40:  # потолок одновременных анимаций
+                    self._anim.pop(next(iter(self._anim)), None)
+                self._anim[key] = {"master": img, "frames": frames,
+                                   "delays": delays, "i": 0, "left": delays[0]}
+                return img  # мастер держим вне LRU, чтобы не выселился
         self.images.put(key, img)
         return img
+
+    def _build_frames(self, anim):
+        frames, delays = [], []
+        try:
+            if anim[0] == "frames":
+                frames = [tk.PhotoImage(data=f) for f in anim[1]]
+                delays = list(anim[2])
+            else:  # ("gif", b64): кадры достаёт сам tkinter
+                for i in range(60):
+                    try:
+                        frames.append(tk.PhotoImage(data=anim[1],
+                                                    format="gif -index %d" % i))
+                    except tk.TclError:
+                        break
+        except Exception:
+            pass
+        if len(delays) != len(frames):
+            delays = [80] * len(frames)
+        return frames, delays
+
+    def _animate(self):
+        # один тик двигает все анимированные смайлы: кадр копируется в мастер,
+        # и Tk сам перерисовывает каждое его вхождение в лентах
+        for st in self._anim.values():
+            st["left"] -= 50
+            if st["left"] <= 0:
+                st["i"] = (st["i"] + 1) % len(st["frames"])
+                st["left"] = max(40, st["delays"][st["i"]])
+                m = st["master"]
+                try:
+                    m.tk.call(str(m), "copy", str(st["frames"][st["i"]]),
+                              "-compositingrule", "set")
+                except tk.TclError:
+                    pass
+        self.root.after(50, self._animate)
 
     def render(self, item):
         self.render_batch([item])
