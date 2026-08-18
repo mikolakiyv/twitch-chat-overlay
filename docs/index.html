@@ -3,121 +3,294 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Twitch Chat Overlay — чат поверх любых окон и игр</title>
-<meta name="description" content="Лёгкий оверлей чата Twitch для Windows: поверх всех окон, вкладки каналов, смайлы 7TV с анимацией, упоминания, отправка сообщений. Бесплатно, open source.">
-<meta property="og:title" content="Twitch Chat Overlay">
-<meta property="og:description" content="Чат Twitch поверх любых окон и игр. Смайлы 7TV, вкладки, упоминания. Бесплатно, open source.">
+<title>Twitch Chat Overlay — чат поверх игры</title>
+<meta name="description" content="Лёгкий оверлей чата Twitch для Windows: поверх всех окон, смайлы 7TV с анимацией, вкладки каналов, упоминания. Бесплатно, open source, без установки.">
+<meta property="og:title" content="Twitch Chat Overlay — чат поверх игры">
+<meta property="og:description" content="Смайлы 7TV с анимацией · вкладки каналов · работает в РФ без VPN · бесплатно и open source">
 <meta property="og:image" content="https://mikolakiyv.github.io/twitch-chat-overlay/screenshot_main.png">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%239147ff'/><rect x='18' y='24' width='64' height='38' rx='10' fill='white'/><path d='M30 58 L52 58 L34 78 Z' fill='white'/><circle cx='35' cy='43' r='4.5' fill='%239147ff'/><circle cx='50' cy='43' r='4.5' fill='%239147ff'/><circle cx='65' cy='43' r='4.5' fill='%239147ff'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;800&family=Unbounded:wght@500;700&display=swap&subset=cyrillic" rel="stylesheet">
 <style>
   :root {
-    --bg: #0f0f12; --panel: #17171a; --panel2: #1e1e22; --border: #2e2e35;
-    --fg: #efeff1; --muted: #a3a3ab; --accent: #9147ff; --accent2: #772ce8;
+    --bg: #0d0a14; --surface: #17111f; --panel: #1c1526; --line: #2c2338;
+    --accent: #9147ff; --accent-hi: #a970ff;
+    --ink: #f4f1fa; --mut: #9d93b4;
+    --green: #57d964; --coral: #ff7f50; --blue: #5c9dff; --pink: #ff69b4;
+    --disp: "Unbounded", system-ui, sans-serif;
+    --body: "Manrope", system-ui, sans-serif;
+    --chat: "Segoe UI", system-ui, sans-serif;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    background: radial-gradient(1200px 600px at 50% -100px, #241a3a 0%, var(--bg) 55%);
-    color: var(--fg); font-family: "Segoe UI", system-ui, sans-serif; line-height: 1.55;
+  html { scroll-behavior: smooth; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--body); line-height: 1.6; }
+  a { color: inherit; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+  /* ── шапка ─────────────────────────────────────────── */
+  nav { display: flex; align-items: center; gap: 12px; padding: 22px 0 0; }
+  nav .mark { width: 34px; height: 34px; border-radius: 9px; flex: none; }
+  nav .name { font-family: var(--disp); font-weight: 500; font-size: .82rem; letter-spacing: .02em; }
+  nav .spacer { flex: 1; }
+  nav a.gh { color: var(--mut); text-decoration: none; font-size: .9rem; padding: 7px 14px; border: 1px solid var(--line); border-radius: 999px; transition: color .15s, border-color .15s; }
+  nav a.gh:hover { color: var(--ink); border-color: var(--accent); }
+
+  /* ── герой ─────────────────────────────────────────── */
+  .hero { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; padding: 64px 0 40px; }
+  .eyebrow { color: var(--mut); font-size: .82rem; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; }
+  h1 { font-family: var(--disp); font-weight: 700; font-size: clamp(1.9rem, 4.2vw, 3.1rem); line-height: 1.14; letter-spacing: -.01em; margin: 14px 0 18px; }
+  h1 .over { color: var(--accent-hi); }
+  .sub { color: var(--mut); font-size: 1.06rem; max-width: 30rem; }
+  .cta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 28px 0 10px; }
+  .dl {
+    display: inline-flex; align-items: center; gap: 10px; text-decoration: none;
+    background: linear-gradient(180deg, var(--accent-hi), var(--accent));
+    color: #fff; font-weight: 800; font-size: 1.04rem; padding: 15px 28px; border-radius: 999px;
+    box-shadow: 0 10px 36px rgba(145, 71, 255, .38); transition: transform .14s, box-shadow .14s;
   }
-  .wrap { max-width: 960px; margin: 0 auto; padding: 48px 20px 40px; }
-  header { text-align: center; margin-bottom: 36px; }
-  .logo { width: 88px; height: 88px; border-radius: 22px; margin-bottom: 18px; }
-  h1 { font-size: 2.4rem; letter-spacing: -.5px; }
-  .tag { color: var(--muted); font-size: 1.12rem; margin-top: 8px; }
-  .tag b { color: var(--fg); }
-  .btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin: 26px 0 8px; }
-  .btn {
-    display: inline-flex; align-items: center; gap: 9px; padding: 13px 26px;
-    border-radius: 999px; text-decoration: none; font-weight: 600; font-size: 1.02rem;
-    transition: transform .12s, background .12s;
+  .dl:hover { transform: translateY(-2px); box-shadow: 0 14px 44px rgba(145, 71, 255, .5); }
+  .dl svg { width: 18px; height: 18px; }
+  .alt { color: var(--mut); text-decoration: none; font-size: .95rem; border-bottom: 1px dashed var(--line); padding-bottom: 1px; }
+  .alt:hover { color: var(--ink); }
+  .meta { color: var(--mut); font-size: .84rem; }
+  .meta b { color: var(--ink); font-weight: 600; }
+
+  /* сцена: ночная катка + окно оверлея */
+  .scene {
+    position: relative; border-radius: 20px; border: 1px solid var(--line);
+    background:
+      radial-gradient(420px 260px at 82% 18%, rgba(87, 217, 100, .13), transparent 65%),
+      radial-gradient(500px 320px at 12% 88%, rgba(255, 127, 80, .12), transparent 65%),
+      radial-gradient(700px 500px at 50% 40%, #1d1430 0%, #120d1d 60%, #0d0a14 100%);
+    min-height: 480px; overflow: hidden;
   }
-  .btn:hover { transform: translateY(-2px); }
-  .btn-main { background: var(--accent); color: #fff; box-shadow: 0 6px 24px rgba(145,71,255,.35); }
-  .btn-main:hover { background: var(--accent2); }
-  .btn-ghost { background: var(--panel2); color: var(--fg); border: 1px solid var(--border); }
-  .note { color: var(--muted); font-size: .86rem; text-align: center; }
-  .note a { color: var(--accent); }
-  .shots { display: grid; grid-template-columns: 1.35fr 1fr; gap: 14px; margin: 38px 0; }
-  .shots img {
-    width: 100%; border-radius: 14px; border: 1px solid var(--border); display: block;
-    background: var(--panel);
+  .scene::after { /* лёгкий HUD: минимапа */
+    content: ""; position: absolute; right: 22px; top: 20px; width: 78px; height: 78px;
+    border: 1px solid rgba(157, 147, 180, .25); border-radius: 50%;
+    background:
+      radial-gradient(circle 3px at 60% 40%, var(--coral) 98%, transparent),
+      radial-gradient(circle 3px at 35% 62%, var(--blue) 98%, transparent),
+      radial-gradient(circle 2.5px at 52% 55%, var(--green) 98%, transparent);
   }
-  .shots .col { display: flex; flex-direction: column; gap: 14px; }
-  .features {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 12px; margin: 8px 0 38px;
+  .scene::before { /* полоска HP */
+    content: ""; position: absolute; left: 24px; bottom: 24px; width: 130px; height: 7px;
+    border-radius: 99px; background: linear-gradient(90deg, var(--green) 0 72%, rgba(157,147,180,.2) 72%);
   }
-  .card {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
-    padding: 16px 18px;
+  .ov {
+    position: absolute; left: 50%; top: 50%;
+    width: 340px; transform: translate(-50%, -50%) rotate(-2.4deg);
+    background: #17171a; border: 1px solid #3a3a41; border-radius: 12px;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, .65), 0 0 0 1px rgba(145, 71, 255, .12), 0 0 60px rgba(145, 71, 255, .16);
+    font-family: var(--chat); font-size: .84rem; overflow: hidden;
+    animation: rise .8s cubic-bezier(.2, .7, .2, 1) both;
   }
-  .card b { display: block; margin-bottom: 4px; }
-  .card span { color: var(--muted); font-size: .95rem; }
-  h2 { font-size: 1.35rem; margin: 34px 0 14px; }
-  .how { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 20px 22px; }
-  .how ol { margin-left: 22px; }
-  .how li { margin: 6px 0; }
-  .how .warn { color: var(--muted); font-size: .92rem; margin-top: 12px; }
-  footer { text-align: center; color: var(--muted); margin-top: 44px; font-size: .95rem; }
-  footer a { color: var(--accent); text-decoration: none; }
-  .heart { color: #ff6bd6; }
-  @media (max-width: 720px) { .shots { grid-template-columns: 1fr; } h1 { font-size: 1.9rem; } }
+  @keyframes rise { from { opacity: 0; transform: translate(-50%, -44%) rotate(-2.4deg); } }
+  .ov-bar { display: flex; align-items: center; background: #1e1e22; padding: 7px 10px; gap: 8px; }
+  .ov-bar b { font-size: .8rem; }
+  .ov-bar .sp { flex: 1; }
+  .ov-bar i { font-style: normal; color: #cfcfd6; font-size: .78rem; }
+  .ov-bar i.h { color: var(--accent-hi); }
+  .ov-tabs { display: flex; gap: 2px; background: #1e1e22; padding: 0 8px 6px; font-size: .74rem; color: #a3a3ab; }
+  .ov-tabs span { padding: 2px 7px; }
+  .ov-tabs .on { color: var(--accent-hi); font-weight: 700; }
+  .ov-feed { list-style: none; padding: 8px 10px; height: 252px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+  .ov-feed li { padding: 2.5px 4px; border-radius: 6px; animation: pop .3s ease both; }
+  @keyframes pop { from { opacity: 0; transform: translateY(7px); } }
+  .ov-feed .nick { font-weight: 700; }
+  .ov-feed img { height: 22px; vertical-align: -6px; }
+  .ov-feed img.badge { height: 15px; vertical-align: -2px; margin-right: 4px; }
+  .ov-feed .sys { color: #a3a3ab; font-style: italic; font-size: .78rem; }
+  .ov-feed .mn { background: #3d2a66; }
+  .ov-input { display: flex; gap: 6px; align-items: center; background: #1e1e22; padding: 7px 10px; }
+  .ov-input .chip { background: #2e2e35; border-radius: 99px; padding: 3px 9px; font-size: .72rem; color: #a6a6ae; }
+  .ov-input .field { flex: 1; background: #26262b; border-radius: 99px; padding: 4px 12px; font-size: .76rem; color: #7e7691; }
+
+  /* ── чипсы-факты ───────────────────────────────────── */
+  .facts { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; padding: 8px 0 8px; }
+  .facts span { border: 1px solid var(--line); border-radius: 999px; padding: 7px 16px; font-size: .88rem; color: var(--mut); }
+  .facts b { color: var(--ink); font-weight: 600; }
+
+  /* ── секции ───────────────────────────────────────── */
+  section { padding: 56px 0 0; }
+  h2 { font-family: var(--disp); font-weight: 500; font-size: 1.25rem; margin-bottom: 24px; }
+  h2 em { font-style: normal; color: var(--accent-hi); }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .f {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px 18px 16px; border-left: 3px solid var(--c, var(--accent));
+  }
+  .f b { display: block; font-size: 1.0rem; margin-bottom: 5px; }
+  .f p { color: var(--mut); font-size: .93rem; line-height: 1.5; }
+  .f kbd { background: var(--panel); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 1px 7px; font-family: var(--body); font-size: .84rem; color: var(--ink); }
+
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .step { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px; position: relative; }
+  .step .n { font-family: var(--disp); color: var(--accent-hi); font-size: .95rem; font-weight: 700; margin-bottom: 8px; }
+  .step p { color: var(--mut); font-size: .93rem; }
+  .step p b { color: var(--ink); }
+  .smart { margin-top: 14px; color: var(--mut); font-size: .88rem; background: var(--surface); border: 1px dashed var(--line); border-radius: 12px; padding: 12px 16px; }
+  .smart b { color: var(--ink); }
+
+  .shots { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+  .shot { flex: 0 1 auto; }
+  .shot img { display: block; max-width: 100%; width: auto; border-radius: 12px; border: 1px solid var(--line); box-shadow: 0 16px 48px rgba(0, 0, 0, .45); }
+  .shot figcaption { color: var(--mut); font-size: .84rem; margin-top: 9px; }
+
+  /* ── финальный CTA + футер ─────────────────────────── */
+  .last { text-align: center; padding: 72px 0 26px; }
+  .last h2 { font-size: 1.5rem; margin-bottom: 22px; }
+  footer { border-top: 1px solid var(--line); margin-top: 40px; padding: 26px 0 34px; color: var(--mut); font-size: .92rem; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  footer a { color: var(--accent-hi); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  a:focus-visible, .dl:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: 3px; border-radius: 8px; }
+
+  @media (max-width: 900px) {
+    .hero { grid-template-columns: 1fr; gap: 34px; padding-top: 44px; }
+    .scene { min-height: 430px; }
+    .grid, .steps { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 600px) {
+    .grid, .steps { grid-template-columns: 1fr; }
+    .ov { width: 300px; }
+    .shots { flex-direction: column; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ov, .ov-feed li { animation: none; }
+  }
 </style>
 </head>
 <body>
+
 <div class="wrap">
+  <nav>
+    <svg class="mark" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="100" height="100" rx="22" fill="#9147ff"/><rect x="18" y="24" width="64" height="38" rx="10" fill="white"/><path d="M30 58 L52 58 L34 78 Z" fill="white"/><circle cx="35" cy="43" r="4.5" fill="#9147ff"/><circle cx="50" cy="43" r="4.5" fill="#9147ff"/><circle cx="65" cy="43" r="4.5" fill="#9147ff"/></svg>
+    <span class="name">Twitch Chat Overlay</span>
+    <span class="spacer"></span>
+    <a class="gh" href="https://github.com/mikolakiyv/twitch-chat-overlay">GitHub</a>
+  </nav>
 
-<header>
-  <svg class="logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" rx="22" fill="#9147ff"/><rect x="18" y="24" width="64" height="38" rx="10" fill="white"/><path d="M30 58 L52 58 L34 78 Z" fill="white"/><circle cx="35" cy="43" r="4.5" fill="#9147ff"/><circle cx="50" cy="43" r="4.5" fill="#9147ff"/><circle cx="65" cy="43" r="4.5" fill="#9147ff"/></svg>
-  <h1>Twitch Chat Overlay</h1>
-  <p class="tag">Чат Twitch <b>поверх любых окон и игр</b> · смайлы 7TV с анимацией · вкладки каналов<br>
-  <span style="font-size:.95rem">Lightweight always-on-top Twitch chat overlay for Windows</span></p>
+  <header class="hero">
+    <div>
+      <p class="eyebrow">Windows · бесплатно · open source</p>
+      <h1>Чат Twitch —<br><span class="over">поверх игры</span>,<br>а не вместо неё</h1>
+      <p class="sub">Лёгкое окно с чатом, которое держится над любой игрой и приложением.
+      Смайлы 7TV с анимацией, вкладки каналов, подсветка упоминаний — как настоящий чат, только всегда на виду.</p>
+      <div class="cta">
+        <a class="dl" href="https://github.com/mikolakiyv/twitch-chat-overlay/releases/latest/download/TwitchChatOverlay.exe">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v12m0 0l-5-5m5 5l5-5" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 21h16" stroke="white" stroke-width="2.4" stroke-linecap="round"/></svg>
+          Скачать для Windows
+        </a>
+        <a class="alt" href="https://github.com/mikolakiyv/twitch-chat-overlay/releases/latest/download/twitch-chat-overlay.zip">версия с исходниками .zip</a>
+      </div>
+      <p class="meta">v1.2.0 · ~17 МБ · <b>без установки</b> · Windows 10/11 · русский и английский</p>
+    </div>
 
-  <div class="btns">
-    <a class="btn btn-main" href="https://github.com/mikolakiyv/twitch-chat-overlay/releases/latest/download/TwitchChatOverlay.exe">
-      ⬇&nbsp;Скачать для Windows&nbsp;·&nbsp;.exe
+    <div class="scene" aria-hidden="true">
+      <div class="ov">
+        <div class="ov-bar"><b>#stream +1</b><span class="sp"></span><i class="h">♥</i><i>⚙</i><i>✕</i></div>
+        <div class="ov-tabs"><span class="on">Все</span><span>#stream</span><span>#games</span></div>
+        <ul class="ov-feed" id="feed"></ul>
+        <div class="ov-input"><span class="chip">#stream ▾</span><span class="field">Написать в чат…</span></div>
+      </div>
+    </div>
+  </header>
+
+  <div class="facts">
+    <span>работает в РФ <b>без VPN</b></span>
+    <span>смайлы <b>7TV + Twitch</b> с анимацией</span>
+    <span><b>F9</b> — только текст поверх игры</span>
+    <span>≈<b>60 МБ</b> памяти</span>
+  </div>
+
+  <section>
+    <h2>Что умеет <em>оверлей</em></h2>
+    <div class="grid">
+      <div class="f" style="--c:var(--green)"><b>Поверх всего</b><p>Держится над играми и приложениями. Для игр — режим «оконный без рамки», как для любого оверлея.</p></div>
+      <div class="f" style="--c:var(--coral)"><b>Только текст — <kbd>F9</kbd></b><p>Убирает рамку и фон: над игрой парит один чат, клики проходят насквозь. <kbd>F8</kbd> — сквозные клики в обычном окне.</p></div>
+      <div class="f" style="--c:var(--pink)"><b>Смайлы, как в чате</b><p>Twitch и 7TV, анимированные двигаются. Если провайдер блокирует 7TV — картинки сами идут через зеркала, VPN не нужен.</p></div>
+      <div class="f" style="--c:var(--blue)"><b>Вкладки каналов</b><p>Несколько каналов: общий поток «Все» и отдельная вкладка на каждый. Пишете туда, чья вкладка открыта.</p></div>
+      <div class="f" style="--c:var(--accent)"><b>Упоминания</b><p>Тегнули в чате — сообщение подсветится фиолетовым, окно мигнёт. Ник берётся из входа или задаётся вручную.</p></div>
+      <div class="f" style="--c:var(--green)"><b>Отправка сообщений</b><p>Войдите через Twitch — внизу появится поле ввода. Значки модераторов, VIP и сабов — настоящие, клик по нику открывает профиль.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Как <em>запустить</em></h2>
+    <div class="steps">
+      <div class="step"><div class="n">шаг 1</div><p>Скачайте <b>TwitchChatOverlay.exe</b> — устанавливать ничего не нужно.</p></div>
+      <div class="step"><div class="n">шаг 2</div><p>Запустите и введите название канала — можно несколько через запятую.</p></div>
+      <div class="step"><div class="n">шаг 3</div><p>Перетащите куда удобно. Правый клик или <b>⚙</b> — все настройки на одном экране.</p></div>
+    </div>
+    <p class="smart">⚠️ SmartScreen при первом запуске покажет «Windows защитила ваш компьютер»: нажмите <b>«Подробнее» → «Выполнить в любом случае»</b>. Это стандартное предупреждение для программ без платной цифровой подписи — код открыт, его можно проверить на GitHub.</p>
+  </section>
+
+  <section>
+    <h2>Скриншоты <em>без прикрас</em></h2>
+    <div class="shots">
+      <figure class="shot"><img src="screenshot_main.png" width="460" alt="Окно оверлея: вкладки каналов, цветные ники, значки и смайлы 7TV" loading="lazy"><figcaption>Вкладки, значки, смайлы — обычный режим</figcaption></figure>
+      <figure class="shot"><img src="screenshot_textonly.png" width="484" alt="Режим «только текст»: чат парит без рамки и фона" loading="lazy"><figcaption>F9 — только текст поверх игры</figcaption></figure>
+    </div>
+    <div class="shots" style="margin-top:18px">
+      <figure class="shot"><img src="screenshot_settings.png" width="630" alt="Панель настроек: слайдеры, переключатели, темы и язык на одном экране" loading="lazy"><figcaption>Все настройки на одном экране</figcaption></figure>
+    </div>
+  </section>
+
+  <div class="last">
+    <h2>Попробуйте — <em>это быстро</em></h2>
+    <a class="dl" href="https://github.com/mikolakiyv/twitch-chat-overlay/releases/latest/download/TwitchChatOverlay.exe">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v12m0 0l-5-5m5 5l5-5" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 21h16" stroke="white" stroke-width="2.4" stroke-linecap="round"/></svg>
+      Скачать TwitchChatOverlay.exe
     </a>
-    <a class="btn btn-ghost" href="https://github.com/mikolakiyv/twitch-chat-overlay/releases/latest/download/twitch-chat-overlay.zip">исходники .zip</a>
-    <a class="btn btn-ghost" href="https://github.com/mikolakiyv/twitch-chat-overlay">GitHub ★</a>
   </div>
-  <p class="note">Бесплатно · без установки · open source (MIT) · Windows 10/11</p>
-</header>
 
-<div class="shots">
-  <img src="screenshot_main.png" alt="Оверлей поверх игры: вкладки каналов, значки, смайлы 7TV">
-  <div class="col">
-    <img src="screenshot_textonly.png" alt="Режим «только текст» — парящий чат без рамки и фона">
-    <img src="screenshot_settings.png" alt="Все настройки на одном экране">
-  </div>
+  <footer>
+    <span>Сделано <a href="https://twitch.tv/aliveenjoyer">aliveenjoyer</a></span>·
+    <a href="https://www.donationalerts.com/r/nihaoenjoyer">💜 поддержать разработку</a>·
+    <a href="https://github.com/mikolakiyv/twitch-chat-overlay/blob/main/LICENSE">MIT</a>·
+    <a href="https://github.com/mikolakiyv/twitch-chat-overlay">исходный код</a>
+  </footer>
 </div>
 
-<div class="features">
-  <div class="card"><b>📌 Поверх всего</b><span>держится над играми и приложениями; для игр — режим «оконный без рамки»</span></div>
-  <div class="card"><b>👻 Только текст — F9</b><span>убирает рамку и фон: парящий чат поверх игры, клики проходят насквозь</span></div>
-  <div class="card"><b>😀 Смайлы Twitch и 7TV</b><span>анимированные двигаются как в чате; работают в РФ без VPN через зеркала</span></div>
-  <div class="card"><b>🗂 Несколько каналов</b><span>общий поток «Все» + вкладка на каждый канал</span></div>
-  <div class="card"><b>🏅 Как настоящий чат</b><span>цвета ников, значки модеров/VIP/сабов, клик по нику открывает профиль</span></div>
-  <div class="card"><b>✍️ Отправка сообщений</b><span>войдите через Twitch и пишите в чат прямо из оверлея</span></div>
-  <div class="card"><b>💜 Упоминания</b><span>тегнули — сообщение подсветится, окно мигнёт</span></div>
-  <div class="card"><b>⚙️ Всё настраивается</b><span>прозрачность от 30%, темы, бинды, размер, RU/EN — на одном экране</span></div>
-</div>
-
-<h2>Как запустить</h2>
-<div class="how">
-  <ol>
-    <li>Скачайте <b>TwitchChatOverlay.exe</b> кнопкой выше — устанавливать ничего не нужно.</li>
-    <li>Запустите и введите название канала (можно несколько через запятую).</li>
-    <li>Готово: перетаскивайте за верхнюю полосу, правый клик или ⚙ — настройки, <b>F9</b> — только текст, <b>F8</b> — сквозные клики.</li>
-  </ol>
-  <p class="warn">⚠️ Windows SmartScreen при первом запуске: <b>«Подробнее» → «Выполнить в любом случае»</b> — стандартное предупреждение для программ без платной цифровой подписи. Код открыт, можно проверить на GitHub.</p>
-</div>
-
-<footer>
-  <p>Сделано <a href="https://twitch.tv/aliveenjoyer">aliveenjoyer</a> ·
-  <a href="https://www.donationalerts.com/r/nihaoenjoyer"><span class="heart">💜</span> поддержать разработку</a> ·
-  <a href="https://github.com/mikolakiyv/twitch-chat-overlay/blob/main/LICENSE">MIT License</a></p>
-</footer>
-
-</div>
+<script>
+(function () {
+  var CDN = "https://static-cdn.jtvnw.net";
+  var MOD = "<img class='badge' alt='' src='" + CDN + "/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/1'>";
+  var SUB = "<img class='badge' alt='' src='" + CDN + "/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/1'>";
+  var VIP = "<img class='badge' alt='' src='" + CDN + "/badges/v1/b817aba4-fad8-49e2-b88a-7cc744dfa6ec/1'>";
+  var DINO = "<img alt='DinoDance' src='" + CDN + "/emoticons/v2/emotesv2_dcd06b30a5c24f6eb871e8f5edbd44f7/default/dark/1.0'>";
+  var KAPPA = "<img alt='Kappa' src='" + CDN + "/emoticons/v2/25/default/dark/1.0'>";
+  function nick(c, n) { return "<span class='nick' style='color:" + c + "'>" + n + "</span>: "; }
+  var POOL = [
+    "<span class='sys'>Подключено: #stream</span>",
+    MOD + nick("#57d964", "modzilla") + "оверлей висит над игрой и не мешает",
+    nick("#ff7f50", "kotleta") + "нажал F9 — остался один текст 👌",
+    SUB + nick("#5c9dff", "quiet_boi") + "смайлы едут без впна " + KAPPA,
+    nick("#ff69b4", "dancer") + DINO + " " + DINO + " " + DINO,
+    "<span class='mn'>" + nick("#57d964", "modzilla") + "<b style='color:#a970ff'>@ты</b> глянь, тебя тегнули 💜</span>",
+    "<span class='sys'>kotleta подписался на 3 месяца!</span>",
+    VIP + nick("#a970ff", "vip_persona") + "у каждого канала своя вкладка, удобно",
+    nick("#5c9dff", "quiet_boi") + "клик по нику открывает профиль",
+    nick("#ff7f50", "kotleta") + "настройки одним экраном, наконец-то",
+    nick("#57d964", "modzilla") + "и всё это 17 мегабайт " + KAPPA,
+    nick("#ff69b4", "dancer") + "анимация смайлов вкл/выкл в настройках"
+  ];
+  var feed = document.getElementById("feed");
+  var i = 0, MAX = 9;
+  function add() {
+    var li = document.createElement("li");
+    li.innerHTML = POOL[i % POOL.length];
+    if (POOL[i % POOL.length].indexOf("class='mn'") > -1) li.className = "mn";
+    feed.appendChild(li);
+    while (feed.children.length > MAX) feed.removeChild(feed.firstChild);
+    i++;
+  }
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduce) { for (var k = 0; k < MAX; k++) add(); }
+  else { for (var k2 = 0; k2 < 5; k2++) add(); setInterval(add, 1600); }
+})();
+</script>
 </body>
 </html>
