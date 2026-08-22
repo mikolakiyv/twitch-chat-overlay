@@ -108,6 +108,8 @@ def dwm_round(widget, small=False):
 
 apply_palette("twitch")
 
+CHROMA_KEY = "#ff00ff"  # пурпурный фон для захвата окна в OBS (фильтр «Цветовой ключ»)
+
 DEBUG = "--debug" in sys.argv
 
 DEFAULTS = {
@@ -124,6 +126,7 @@ DEFAULTS = {
     "lang": "ru",
     "active_tab": "*",
     "animations": True,
+    "obs_chroma": False,
     "key_clickthrough": {"vk": 119, "name": "F8"},
     "key_frameless": {"vk": 120, "name": "F9"},
     "max_messages": 150,
@@ -152,6 +155,10 @@ STRINGS = {
         "mention_saved": "Упоминания: @%s",
         "tab_all": "Все",
         "s_anim": "Анимация смайлов",
+        "s_chroma": "Хромакей для OBS",
+        "chroma_on": ("Фон для захвата окна стал пурпурным. В OBS: правый клик по источнику → "
+                      "«Фильтры» → «Цветовой ключ», цвет — пурпурный. На вашем экране всё как раньше."),
+        "chroma_off": "Хромакей для OBS выключен.",
         "pil_off": "Смайлы 7TV выключены: нет пакета Pillow. Запустите через батник — установит сам.",
         "connecting": "Подключение к Twitch…",
         "reconnecting": "Переподключение…",
@@ -241,6 +248,10 @@ STRINGS = {
         "mention_saved": "Mentions: @%s",
         "tab_all": "All",
         "s_anim": "Animated emotes",
+        "s_chroma": "OBS chroma key",
+        "chroma_on": ("Window-capture background is now magenta. In OBS: right-click the source → "
+                      "Filters → Color Key, key color magenta. Your own screen is unchanged."),
+        "chroma_off": "OBS chroma key is off.",
         "pil_off": "7TV emotes disabled: Pillow package missing. Run the .bat — it installs it.",
         "connecting": "Connecting to Twitch…",
         "reconnecting": "Reconnecting…",
@@ -1446,6 +1457,7 @@ class OverlayApp:
         self.theme_var = tk.StringVar(value=cfg.get("theme", "twitch"))
         self.lang_var = tk.StringVar(value=cfg.get("lang", "ru"))
         self.anim_enabled = tk.BooleanVar(value=bool(cfg.get("animations", True)))
+        self.obs_chroma = tk.BooleanVar(value=bool(cfg.get("obs_chroma")))
         self.settings_win = None
 
         root.overrideredirect(True)
@@ -1665,6 +1677,8 @@ class OverlayApp:
                        command=self.apply_topmost, **chk).pack(side="left")
         tk.Checkbutton(row(), text=T("m_ghost"), variable=self.ghost,
                        command=self.apply_look, **chk).pack(side="left")
+        tk.Checkbutton(row(), text=T("s_chroma"), variable=self.obs_chroma,
+                       command=self.toggle_chroma, **chk).pack(side="left")
 
         # --- вид: светлые слайдеры-пилюли ---
         header("s_appear")
@@ -2000,16 +2014,34 @@ class OverlayApp:
 
     def apply_look(self):
         self.cfg["ghost"] = bool(self.ghost.get())
+        # Обычный ключ прозрачности — цвет фона. Для OBS-режима фон красится
+        # чисто-пурпурным: на мониторе он так же вырезается, а «Захват окна»
+        # в OBS видит пурпур, который убирается фильтром «Цветовой ключ».
+        key = CHROMA_KEY if self.obs_chroma.get() else BG
         try:
             if self.ghost.get():
+                self._paint_chat_bg(key)
                 self.root.attributes("-alpha", 1.0)
-                self.root.attributes("-transparentcolor", BG)
+                self.root.attributes("-transparentcolor", key)
             else:
+                self._paint_chat_bg(BG)
                 self.root.attributes("-transparentcolor", "")
                 self.root.attributes("-alpha", float(self.cfg.get("opacity", 0.88)))
         except tk.TclError:
             pass
         save_config(self.cfg)
+
+    def _paint_chat_bg(self, color):
+        self.frame.configure(bg=color)
+        for w in self.texts.values():
+            w.configure(bg=color)
+        self.grip.configure(bg=color)
+
+    def toggle_chroma(self):
+        self.cfg["obs_chroma"] = bool(self.obs_chroma.get())
+        save_config(self.cfg)
+        self.apply_look()
+        self.sys_message(T("chroma_on") if self.obs_chroma.get() else T("chroma_off"))
 
     def _force_topmost(self, enable):
         """Прямой SetWindowPos: надёжнее, чем tk-атрибут, который Tk кэширует."""
@@ -2235,6 +2267,7 @@ class OverlayApp:
             self.cfg["active_tab"] = "*"
         self.switch_tab(self.cfg["active_tab"], force=True)
         self._rebuild_tabs()
+        self.apply_look()  # новые ленты вкладок докрашиваются под текущий режим
         self.clear_chat()
         self.update_chan_btn()
         if not channels:
