@@ -1831,13 +1831,13 @@ class OverlayApp:
         self.grip.bind("<ButtonRelease-1>", lambda e: self.save_geometry())
         for w in (root, self.bar, self.title_lbl):
             w.bind("<Button-3>", self.open_settings)
-        root.bind("<Map>", self._on_map)  # восстановление после сворачивания
 
         self._build_icon_photos()
         self.place_window()
         root.deiconify()
         root.update_idletasks()
         dwm_round(root)  # скруглённые углы окна (Windows 11)
+        self._make_taskbar_proxy()
         self.apply_look()
         self.update_input_bar()
         self.update_mention_re()
@@ -2491,26 +2491,51 @@ class OverlayApp:
 
     # ---------- свернуть / полный экран ----------
 
+    def _make_taskbar_proxy(self):
+        """Невидимое окно-«прокси» с кнопкой в панели задач: у окна без рамки
+        своей кнопки нет, а прокси даёт нативное сворачивание/восстановление
+        без манипуляций с рамкой и миганий."""
+        p = tk.Toplevel(self.root)
+        p.title("Twitch Chat Overlay")
+        try:
+            p.iconbitmap(os.path.join(APP_DIR, "overlay.ico"))
+        except Exception:
+            pass
+        p.geometry("1x1+-32000+-32000")
+        try:
+            p.attributes("-alpha", 0.0)
+        except tk.TclError:
+            pass
+        p.protocol("WM_DELETE_WINDOW", self.quit)
+        p.bind("<Map>", self._proxy_mapped)
+        p.bind("<Unmap>", self._proxy_unmapped)
+        self._proxy = p
+
     def minimize_window(self):
-        """Сворачивание: окну без рамки нужно временно вернуть рамку,
-        чтобы появилась кнопка на панели задач для восстановления."""
         self._minimized = True
         try:
-            self.root.overrideredirect(False)
-            self.root.iconify()
+            self.root.withdraw()
+            self._proxy.iconify()
         except tk.TclError:
             pass
 
-    def _on_map(self, event=None):
+    def _proxy_mapped(self, event=None):
+        # клик по кнопке в таскбаре: прокси развернулся — показываем оверлей
         if not getattr(self, "_minimized", False):
             return
         self._minimized = False
         try:
-            self.root.overrideredirect(True)
+            self.root.deiconify()
             self.root.update_idletasks()
-            dwm_round(self.root)
             self._force_topmost(True)
-            self.apply_look()
+        except tk.TclError:
+            pass
+
+    def _proxy_unmapped(self, event=None):
+        # клик по кнопке в таскбаре при открытом окне — сворачиваемся
+        try:
+            if not getattr(self, "_minimized", False) and self._proxy.state() == "iconic":
+                self.minimize_window()
         except tk.TclError:
             pass
 
