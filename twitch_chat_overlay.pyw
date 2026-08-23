@@ -213,6 +213,7 @@ DEFAULTS = {
     "key_clickthrough": {"vk": 119, "name": "F8"},
     "key_frameless": {"vk": 120, "name": "F9"},
     "key_expand": {"vk": 121, "name": "F10"},
+    "key_fullscreen": {"vk": 122, "name": "F11"},
     "exp_geometry": None,
     "recent_emotes": [],
     "max_messages": 150,
@@ -231,6 +232,9 @@ STRINGS = {
                        "%s — только текст · %s — развернуть"),
         "s_expand": "Развёрнутый мультичат",
         "d_key_expand": "Развернуть мультичат",
+        "s_fullscreen": "Во весь экран",
+        "d_key_fullscreen": "Во весь экран",
+        "tt_min": "Свернуть",
         "tt_emotes": "Смайлы (Twitch и 7TV)",
         "ep_search": "Поиск смайла…",
         "s_channels": "Каналы",
@@ -366,6 +370,9 @@ STRINGS = {
                        "%s — text only · %s — expand"),
         "s_expand": "Expanded multichat",
         "d_key_expand": "Expand multichat",
+        "s_fullscreen": "Fullscreen",
+        "d_key_fullscreen": "Fullscreen",
+        "tt_min": "Minimize",
         "tt_emotes": "Emotes (Twitch & 7TV)",
         "ep_search": "Search emotes…",
         "s_channels": "Channels",
@@ -571,10 +578,10 @@ class LruDict:
             self._d.pop(k, None)
 
 
-EMOTE_CACHE = LruDict(300)        # id -> base64 PNG или None (не удалось скачать)
+EMOTE_CACHE = LruDict(500)        # id -> base64 PNG или None (не удалось скачать)
 BADGE_IMG_CACHE = LruDict(300)    # url -> base64 PNG или None
-SEVENTV_IMG_CACHE = LruDict(300)  # 7tv id -> base64 PNG или None
-DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=4)  # параллельная докачка картинок
+SEVENTV_IMG_CACHE = LruDict(600)  # 7tv id -> base64 PNG или None
+DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=8)  # параллельная докачка картинок
 
 
 def write_cache_file(path, raw):
@@ -688,7 +695,8 @@ def load_config():
     cfg["recent_emotes"] = rec[:24]
     for key, default in (("key_clickthrough", DEFAULTS["key_clickthrough"]),
                          ("key_frameless", DEFAULTS["key_frameless"]),
-                         ("key_expand", DEFAULTS["key_expand"])):
+                         ("key_expand", DEFAULTS["key_expand"]),
+                         ("key_fullscreen", DEFAULTS["key_fullscreen"])):
         v = cfg.get(key)
         if not (isinstance(v, dict) and isinstance(v.get("vk"), int) and v.get("name")):
             cfg[key] = dict(default)
@@ -787,7 +795,7 @@ def _decode_frames(raw, target_h=None):
     frames, delays = [], []
     img = _PILImage.open(_io.BytesIO(raw))
     n = getattr(img, "n_frames", 1)
-    step = max(1, (n + 49) // 50)  # не больше ~50 кадров
+    step = max(1, (n + 31) // 32)  # не больше ~32 кадров (CPU и память)
     for i in range(0, n, step):
         img.seek(i)
         fr = img.convert("RGBA")
@@ -1667,7 +1675,7 @@ class OverlayApp:
         self.cfg = cfg
         self.q = queue.Queue()
         self.irc = None
-        self.images = LruDict(600)  # ключ -> PhotoImage; LRU, чтобы память не росла
+        self.images = LruDict(900)  # ключ -> PhotoImage; LRU, чтобы память не росла
         self._anim = {}             # ключ -> состояние анимации смайла
         self.known_tags = set()
         self._mention_re = None
@@ -1694,6 +1702,9 @@ class OverlayApp:
         self.obs_chroma = tk.BooleanVar(value=bool(cfg.get("obs_chroma")))
         self.expanded = False
         self.expand_var = tk.BooleanVar(value=False)
+        self.fullscreen = False
+        self.fs_var = tk.BooleanVar(value=False)
+        self._minimized = False
         self._tw_emotes = None
         self.emote_win = None
         self.settings_win = None
@@ -1739,12 +1750,16 @@ class OverlayApp:
         self.heart_btn = tk.Label(self.bar, text=" ♥ ", bg=BAR_BG, fg=ACCENT,
                                   font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.heart_btn.pack(side="right")
+        self.min_btn = tk.Label(self.bar, text=" — ", bg=BAR_BG, fg=BTN_FG,
+                                font=("Segoe UI", 10, "bold"), cursor="hand2")
+        self.min_btn.pack(side="right")
+        self.min_btn.bind("<Button-1>", lambda e: self.minimize_window())
         self.close_btn.bind("<Button-1>", lambda e: self.quit())
         self.gear_btn.bind("<Button-1>", self.open_settings)
         self.heart_btn.bind("<Button-1>", lambda e: webbrowser.open(DONATE_URL))
         self.heart_btn.bind("<Enter>", lambda e: self.heart_btn.configure(fg=ACCENT_HOVER))
         self.heart_btn.bind("<Leave>", lambda e: self.heart_btn.configure(fg=ACCENT))
-        for b in (self.close_btn, self.gear_btn):
+        for b in (self.close_btn, self.gear_btn, self.min_btn):
             b.bind("<Enter>", lambda e, w=b: w.configure(fg=FG))
             b.bind("<Leave>", lambda e, w=b: w.configure(fg=BTN_FG))
 
@@ -1802,7 +1817,8 @@ class OverlayApp:
 
         for w, key in ((self.heart_btn, "tt_donate"), (self.gear_btn, "tt_menu"),
                        (self.close_btn, "tt_close"), (self.chan_btn, "tt_chan"),
-                       (self.announce_btn, "tt_announce")):
+                       (self.announce_btn, "tt_announce"), (self.min_btn, "tt_min"),
+                       (self.emote_btn, "tt_emotes")):
             Tooltip(w, key)
 
         # --- события ---
@@ -1815,6 +1831,7 @@ class OverlayApp:
         self.grip.bind("<ButtonRelease-1>", lambda e: self.save_geometry())
         for w in (root, self.bar, self.title_lbl):
             w.bind("<Button-3>", self.open_settings)
+        root.bind("<Map>", self._on_map)  # восстановление после сворачивания
 
         self._build_icon_photos()
         self.place_window()
@@ -1965,6 +1982,13 @@ class OverlayApp:
                        **chk).pack(side="left")
         chip_btn(r, self.cfg["key_expand"]["name"],
                  lambda: self.rebind_key("key_expand", T("d_key_expand"),
+                                         self.refresh_settings)).pack(side="right")
+        r = row()
+        tk.Checkbutton(r, text=T("s_fullscreen"), variable=self.fs_var,
+                       command=lambda: self.set_fullscreen(self.fs_var.get()),
+                       **chk).pack(side="left")
+        chip_btn(r, self.cfg["key_fullscreen"]["name"],
+                 lambda: self.rebind_key("key_fullscreen", T("d_key_fullscreen"),
                                          self.refresh_settings)).pack(side="right")
         tk.Checkbutton(row(), text=T("m_topmost"), variable=self.topmost,
                        command=self.apply_topmost, **chk).pack(side="left")
@@ -2223,7 +2247,9 @@ class OverlayApp:
         self.hint_lbl.configure(bg=BAR_BG, fg=SYS_FG)
         self.close_btn.configure(bg=BAR_BG, fg=BTN_FG)
         self.gear_btn.configure(bg=BAR_BG, fg=BTN_FG)
+        self.min_btn.configure(bg=BAR_BG, fg=BTN_FG)
         self.heart_btn.configure(bg=BAR_BG, fg=ACCENT)
+        self.emote_btn.configure(bg=BAR_BG)
         self.input_bar.configure(bg=BAR_BG)
         self.chan_btn.restyle(fill=CHIPBTN_BG, fg=CHIP_FG, parent_bg=BAR_BG)
         self.entry_pill.restyle(fill=ENTRY_BG, fg=FG, parent_bg=BAR_BG)
@@ -2344,6 +2370,9 @@ class OverlayApp:
             self.chan_btn.pack(side="left", padx=(6, 0), pady=5)
         else:
             self.chan_btn.pack_forget()
+        # пикер смайлов показывает набор выбранного канала — обновляем
+        if getattr(self, "emote_win", None) is not None and self.emote_win.winfo_exists():
+            self._ep_render()
 
     def _ph_set(self):
         if not self._ph_on and not self.entry.get():
@@ -2459,6 +2488,71 @@ class OverlayApp:
                 btn.configure(image=img)
             except tk.TclError:
                 pass
+
+    # ---------- свернуть / полный экран ----------
+
+    def minimize_window(self):
+        """Сворачивание: окну без рамки нужно временно вернуть рамку,
+        чтобы появилась кнопка на панели задач для восстановления."""
+        self._minimized = True
+        try:
+            self.root.overrideredirect(False)
+            self.root.iconify()
+        except tk.TclError:
+            pass
+
+    def _on_map(self, event=None):
+        if not getattr(self, "_minimized", False):
+            return
+        self._minimized = False
+        try:
+            self.root.overrideredirect(True)
+            self.root.update_idletasks()
+            dwm_round(self.root)
+            self._force_topmost(True)
+            self.apply_look()
+        except tk.TclError:
+            pass
+
+    def _monitor_rect(self):
+        """Границы монитора, на котором сейчас окно (для F11)."""
+        try:
+            hwnd = self.user32.GetAncestor(self.root.winfo_id(), 2)
+            hmon = self.user32.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+
+            class RECT(ctypes.Structure):
+                _fields_ = [("l", ctypes.c_long), ("t", ctypes.c_long),
+                            ("r", ctypes.c_long), ("b", ctypes.c_long)]
+
+            class MI(ctypes.Structure):
+                _fields_ = [("cb", ctypes.c_ulong), ("mon", RECT),
+                            ("work", RECT), ("flags", ctypes.c_ulong)]
+
+            mi = MI()
+            mi.cb = ctypes.sizeof(MI)
+            if self.user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+                m = mi.mon
+                return m.l, m.t, m.r, m.b
+        except Exception:
+            pass
+        return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+
+    def set_fullscreen(self, on):
+        on = bool(on)
+        if on == self.fullscreen:
+            return
+        self.fullscreen = on
+        self.fs_var.set(on)
+        if on:
+            self._pre_fs = (self.root.winfo_x(), self.root.winfo_y(),
+                            self.root.winfo_width(), self.root.winfo_height())
+            l, t, r, b = self._monitor_rect()
+            self.root.geometry("%dx%d+%d+%d" % (r - l, b - t, l, t))
+        else:
+            g = getattr(self, "_pre_fs", None)
+            if g:
+                self.root.geometry("%dx%d+%d+%d" % (g[2], g[3], g[0], g[1]))
+        self.grip.lift()
 
     # ---------- F10: компактный оверлей <-> развёрнутый мультичат ----------
 
@@ -2577,13 +2671,20 @@ class OverlayApp:
             seen.add(k)
             items.append((name, kind, eid))
 
+        # только смайлы, активные на выбранном канале: его 7TV-набор, глобальные
+        # 7TV и твичевские пользователя (те работают в любом чате)
+        cm = maps.get(ch) or {}
+        gm = maps.get("global") or {}
+        valid7 = set(cm.values()) | set(gm.values())
         for t in self.cfg.get("recent_emotes") or []:
+            if t[2] == "7tv" and t[1] not in valid7:
+                continue  # смайл другого канала — тут не отрисуется
             add(t[0], t[2], t[1])
-        for name, eid in sorted((maps.get(ch) or {}).items()):
+        for name, eid in sorted(cm.items()):
             add(name, "7tv", eid)
         for e in (self._tw_emotes or []):
             add(e["name"], "tw", e["id"])
-        for name, eid in sorted((maps.get("global") or {}).items()):
+        for name, eid in sorted(gm.items()):
             add(name, "7tv", eid)
         return items[:128]
 
@@ -2805,6 +2906,8 @@ class OverlayApp:
                 self.apply_frameless()
             if self._key_pressed(self.cfg["key_expand"]["vk"]):
                 self.set_expanded(not self.expanded)
+            if self._key_pressed(self.cfg["key_fullscreen"]["vk"]):
+                self.set_fullscreen(not self.fullscreen)
         self.root.after(120, self.poll_keys)
 
     def rebind_key(self, which, title, on_done=None):
@@ -2826,8 +2929,8 @@ class OverlayApp:
             if e.keycode in (16, 17, 18):  # Shift/Ctrl/Alt сами по себе не подходят
                 lbl.configure(text=T("d_key_mod"))
                 return
-            others = [k for k in ("key_frameless", "key_clickthrough", "key_expand")
-                      if k != which]
+            others = [k for k in ("key_frameless", "key_clickthrough",
+                                  "key_expand", "key_fullscreen") if k != which]
             if any(e.keycode == self.cfg[o]["vk"] for o in others):
                 lbl.configure(text=T("d_key_taken"))
                 return
@@ -2882,6 +2985,17 @@ class OverlayApp:
         self.save_geometry()
 
     def save_geometry(self):
+        if self.fullscreen:
+            return  # временная геометрия, не запоминаем
+        if self.expanded:
+            try:
+                self.cfg["exp_geometry"] = [self.root.winfo_x(), self.root.winfo_y(),
+                                            self.root.winfo_width(),
+                                            self.root.winfo_height()]
+                save_config(self.cfg)
+            except tk.TclError:
+                pass
+            return
         try:
             self.cfg["x"] = self.root.winfo_x()
             self.cfg["y"] = self.root.winfo_y()
