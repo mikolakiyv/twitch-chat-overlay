@@ -149,6 +149,14 @@ def draw_mod_icon(kind, size, hex_color):
         for fx in (0.43, 0.5, 0.57):                                         # рёбра
             d.line([S * fx, top + S * 0.10, S * fx, S - m - S * 0.06],
                    fill=col, width=max(2, lw - 1))
+    elif kind == "emote":
+        d.ellipse([m, m, S - m, S - m], outline=col, width=lw)
+        r_eye = lw * 0.7
+        for ex in (c - S * 0.13, c + S * 0.13):
+            d.ellipse([ex - r_eye, S * 0.40 - r_eye, ex + r_eye, S * 0.40 + r_eye],
+                      fill=col)
+        d.arc([c - S * 0.18, S * 0.34, c + S * 0.18, S * 0.66], 25, 155,
+              fill=col, width=lw)
     elif kind == "announce":
         d.polygon([(S * 0.20, S * 0.40), (S * 0.20, S * 0.60),
                    (S * 0.42, S * 0.60), (S * 0.62, S * 0.76),
@@ -204,6 +212,9 @@ DEFAULTS = {
     "mod_icons": True,
     "key_clickthrough": {"vk": 119, "name": "F8"},
     "key_frameless": {"vk": 120, "name": "F9"},
+    "key_expand": {"vk": 121, "name": "F10"},
+    "exp_geometry": None,
+    "recent_emotes": [],
     "max_messages": 150,
     "token": "",
     "login": "",
@@ -216,7 +227,12 @@ LANG = "ru"
 
 STRINGS = {
     "ru": {
-        "hint_start": "Правый клик или ⚙ — настройки · %s — сквозные клики · %s — только текст",
+        "hint_start": ("Правый клик или ⚙ — настройки · %s — сквозные клики · "
+                       "%s — только текст · %s — развернуть"),
+        "s_expand": "Развёрнутый мультичат",
+        "d_key_expand": "Развернуть мультичат",
+        "tt_emotes": "Смайлы (Twitch и 7TV)",
+        "ep_search": "Поиск смайла…",
         "s_channels": "Каналы",
         "s_apply": "OK",
         "s_fav": "Избранное",
@@ -346,7 +362,12 @@ STRINGS = {
         "about_support": "Поддержать на DonationAlerts 💜",
     },
     "en": {
-        "hint_start": "Right-click or ⚙ — settings · %s — click-through · %s — text only",
+        "hint_start": ("Right-click or ⚙ — settings · %s — click-through · "
+                       "%s — text only · %s — expand"),
+        "s_expand": "Expanded multichat",
+        "d_key_expand": "Expand multichat",
+        "tt_emotes": "Emotes (Twitch & 7TV)",
+        "ep_search": "Search emotes…",
         "s_channels": "Channels",
         "s_apply": "OK",
         "s_fav": "Favorites",
@@ -660,8 +681,14 @@ def load_config():
             if str(name).strip() and clean:
                 sets[str(name).strip()[:24]] = clean
     cfg["sets"] = sets
+    rec = []
+    for t in cfg.get("recent_emotes") or []:
+        if isinstance(t, (list, tuple)) and len(t) == 3 and all(isinstance(x, str) for x in t):
+            rec.append(list(t))
+    cfg["recent_emotes"] = rec[:24]
     for key, default in (("key_clickthrough", DEFAULTS["key_clickthrough"]),
-                         ("key_frameless", DEFAULTS["key_frameless"])):
+                         ("key_frameless", DEFAULTS["key_frameless"]),
+                         ("key_expand", DEFAULTS["key_expand"])):
         v = cfg.get(key)
         if not (isinstance(v, dict) and isinstance(v.get("vk"), int) and v.get("name")):
             cfg[key] = dict(default)
@@ -1665,6 +1692,10 @@ class OverlayApp:
         self.layout_var = tk.StringVar(value=cfg.get("layout", "tabs"))
         self.anim_enabled = tk.BooleanVar(value=bool(cfg.get("animations", True)))
         self.obs_chroma = tk.BooleanVar(value=bool(cfg.get("obs_chroma")))
+        self.expanded = False
+        self.expand_var = tk.BooleanVar(value=False)
+        self._tw_emotes = None
+        self.emote_win = None
         self.settings_win = None
         self._msg_meta = {}   # тег -> (канал, логин, имя, user_id, message_id)
         self._msg_seq = 0
@@ -1730,8 +1761,14 @@ class OverlayApp:
         self.announce_btn = tk.Label(self.input_bar, bg=BAR_BG, cursor="hand2")
         self.announce_btn.bind("<Button-1>", lambda e: self.send_announce())
         self._announce_shown = False
+        # кнопка-смайлик: открывает пикер смайлов Twitch + 7TV
+        self.emote_btn = tk.Label(self.input_bar, bg=BAR_BG, cursor="hand2")
+        self.emote_btn.bind("<Button-1>", lambda e: self.open_emote_picker())
+        self.emote_btn.bind("<Enter>", lambda e: self._btn_hot(self.emote_btn, "emote", True))
+        self.emote_btn.bind("<Leave>", lambda e: self._btn_hot(self.emote_btn, "emote", False))
         self.chan_btn.pack(side="left", padx=(6, 0), pady=5)
-        self.entry_pill.pack(side="left", fill="x", expand=True, padx=(6, 16), pady=5)
+        self.entry_pill.pack(side="left", fill="x", expand=True, padx=(6, 4), pady=5)
+        self.emote_btn.pack(side="left", padx=(0, 14), pady=5)
         # плейсхолдер: подсказывает, что тут пишут в чат
         self._ph_on = False
         self.entry.bind("<FocusIn>", self._ph_clear)
@@ -1792,7 +1829,7 @@ class OverlayApp:
 
         self.connect(cfg["channels"])
         self.sys_message(T("hint_start", cfg["key_clickthrough"]["name"],
-                           cfg["key_frameless"]["name"]))
+                           cfg["key_frameless"]["name"], cfg["key_expand"]["name"]))
         self.poll_queue()
         self.poll_keys()
         self.keep_topmost()
@@ -1921,6 +1958,13 @@ class OverlayApp:
                        command=self.apply_clickthrough, **chk).pack(side="left")
         chip_btn(r, self.cfg["key_clickthrough"]["name"],
                  lambda: self.rebind_key("key_clickthrough", T("d_key_click"),
+                                         self.refresh_settings)).pack(side="right")
+        r = row()
+        tk.Checkbutton(r, text=T("s_expand"), variable=self.expand_var,
+                       command=lambda: self.set_expanded(self.expand_var.get()),
+                       **chk).pack(side="left")
+        chip_btn(r, self.cfg["key_expand"]["name"],
+                 lambda: self.rebind_key("key_expand", T("d_key_expand"),
                                          self.refresh_settings)).pack(side="right")
         tk.Checkbutton(row(), text=T("m_topmost"), variable=self.topmost,
                        command=self.apply_topmost, **chk).pack(side="left")
@@ -2408,6 +2452,223 @@ class OverlayApp:
         DOWNLOAD_POOL.submit(run)
         self.entry.delete(0, "end")
 
+    def _btn_hot(self, btn, kind, hot):
+        img = (self._icon_hot if hot else self._icon_norm).get(kind)
+        if img is not None:
+            try:
+                btn.configure(image=img)
+            except tk.TclError:
+                pass
+
+    # ---------- F10: компактный оверлей <-> развёрнутый мультичат ----------
+
+    def set_expanded(self, on):
+        on = bool(on)
+        if on == self.expanded:
+            return
+        self.expanded = on
+        self.expand_var.set(on)
+        self.newmsg_count = 0
+        self.newmsg_btn.place_forget()
+        if on:
+            self._pre_expand = {
+                "geo": (self.root.winfo_x(), self.root.winfo_y(),
+                        self.root.winfo_width(), self.root.winfo_height()),
+                "frameless": bool(self.frameless.get()),
+            }
+            if self.frameless.get():
+                self.frameless.set(False)
+                self.apply_frameless()
+            g = self.cfg.get("exp_geometry")
+            if not (isinstance(g, list) and len(g) == 4):
+                x, y, w, h = self._pre_expand["geo"]
+                sw = self.root.winfo_screenwidth()
+                sh = self.root.winfo_screenheight()
+                w2 = min(int(sw * 0.62), max(760, w * 2))
+                h2 = min(int(sh * 0.75), max(520, h * 2))
+                g = [max(0, min(x, sw - w2 - 20)), max(0, min(y, sh - h2 - 60)), w2, h2]
+            self.root.geometry("%dx%d+%d+%d" % (g[2], g[3], g[0], g[1]))
+            if len(self.cfg.get("channels") or []) > 1:
+                self.layout = "columns"
+            self._apply_layout()
+        else:
+            self.cfg["exp_geometry"] = [self.root.winfo_x(), self.root.winfo_y(),
+                                        self.root.winfo_width(), self.root.winfo_height()]
+            save_config(self.cfg)
+            pe = getattr(self, "_pre_expand", None) or {}
+            geo = pe.get("geo")
+            if geo:
+                self.root.geometry("%dx%d+%d+%d" % (geo[2], geo[3], geo[0], geo[1]))
+            self.layout = self.cfg.get("layout", "tabs")
+            self._apply_layout()
+            if pe.get("frameless"):
+                self.frameless.set(True)
+                self.apply_frameless()
+
+    # ---------- пикер смайлов (Twitch + 7TV) ----------
+
+    def open_emote_picker(self):
+        if getattr(self, "emote_win", None) is not None and self.emote_win.winfo_exists():
+            self.emote_win.destroy()
+            self.emote_win = None
+            return
+        win = tk.Toplevel(self.root)
+        self.emote_win = win
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=BORDER)
+        box = tk.Frame(win, bg=BAR_BG, padx=8, pady=8)
+        box.pack(padx=1, pady=1)
+        sp = RoundEntry(box, font=("Segoe UI", 10), fill=ENTRY_BG, fg=FG,
+                        parent_bg=BAR_BG, height=28)
+        self._ep_search = sp.entry
+        sp.pack(fill="x")
+        self._ep_search.insert(0, "")
+        self._ep_search.bind("<KeyRelease>", lambda e: self._ep_render())
+        cv = tk.Canvas(box, width=338, height=290, bg=BAR_BG,
+                       highlightthickness=0, bd=0)
+        cv.pack(pady=(8, 0))
+        self._ep_canvas = cv
+        self._ep_frame = tk.Frame(cv, bg=BAR_BG)
+        cv.create_window(0, 0, window=self._ep_frame, anchor="nw")
+
+        def wheel(e):
+            try:
+                cv.yview_scroll(-1 * (e.delta // 120), "units")
+            except tk.TclError:
+                pass
+        self._ep_wheel = wheel
+        cv.bind("<MouseWheel>", wheel)
+        self._ep_frame.bind("<MouseWheel>", wheel)
+        win.bind("<Escape>", lambda e: win.destroy())
+        # твичевские смайлы пользователя тянем один раз за сессию
+        if self.cfg.get("login") and self._tw_emotes is None:
+            self._tw_emotes = []
+            DOWNLOAD_POOL.submit(self._load_tw_emotes)
+        self._ep_render()
+        win.update_idletasks()
+        bx, by = self.emote_btn.winfo_rootx(), self.emote_btn.winfo_rooty()
+        w = win.winfo_width() or 356
+        h = win.winfo_height() or 350
+        x = max(0, min(bx - w + 34, self.root.winfo_screenwidth() - w))
+        y = by - h - 8
+        if y < 0:
+            y = by + 26
+        win.geometry("+%d+%d" % (x, y))
+        dwm_round(win, small=True)
+        self._ep_search.focus_set()
+        self._ep_poll()
+
+    def _ep_items(self):
+        q = ""
+        try:
+            q = (self._ep_search.get() or "").strip().lower()
+        except tk.TclError:
+            pass
+        maps = self.irc.seventv_maps if self.irc else {}
+        ch = self._send_channel()
+        seen = set()
+        items = []
+
+        def add(name, kind, eid):
+            k = name.lower()
+            if k in seen or (q and q not in k):
+                return
+            seen.add(k)
+            items.append((name, kind, eid))
+
+        for t in self.cfg.get("recent_emotes") or []:
+            add(t[0], t[2], t[1])
+        for name, eid in sorted((maps.get(ch) or {}).items()):
+            add(name, "7tv", eid)
+        for e in (self._tw_emotes or []):
+            add(e["name"], "tw", e["id"])
+        for name, eid in sorted((maps.get("global") or {}).items()):
+            add(name, "7tv", eid)
+        return items[:128]
+
+    def _ep_payload(self, kind, eid):
+        cache = SEVENTV_IMG_CACHE if kind == "7tv" else EMOTE_CACHE
+        return cache.get(eid, _MISS)
+
+    def _ep_render(self):
+        f = self._ep_frame
+        for c in f.winfo_children():
+            c.destroy()
+        self._ep_cells = []
+        for i, (name, kind, eid) in enumerate(self._ep_items()):
+            key = ("e:7tv" + eid) if kind == "7tv" else ("e:" + eid)
+            lbl = tk.Label(f, bg=BAR_BG, cursor="hand2", text=name[:6],
+                           fg=SYS_FG, font=("Segoe UI", 7), width=6, height=2)
+            payload = self._ep_payload(kind, eid)
+            if payload is _MISS:
+                fn = fetch_7tv_image if kind == "7tv" else fetch_emote
+                DOWNLOAD_POOL.submit(fn, eid)
+            elif payload:
+                img = self.cached_image(key, payload)
+                if img is not None:
+                    lbl.configure(image=img, width=38, height=32, text="")
+            lbl.grid(row=i // 8, column=i % 8, padx=1, pady=1)
+            lbl.bind("<Button-1>", lambda e, n=name, k=kind, d=eid: self._ep_pick(n, k, d))
+            lbl.bind("<MouseWheel>", self._ep_wheel)
+            self._ep_cells.append((lbl, kind, eid, key))
+        f.update_idletasks()
+        self._ep_canvas.configure(scrollregion=self._ep_canvas.bbox("all") or (0, 0, 0, 0))
+        self._ep_canvas.yview_moveto(0)
+
+    def _ep_poll(self):
+        win = getattr(self, "emote_win", None)
+        if win is None or not win.winfo_exists():
+            return
+        for lbl, kind, eid, key in self._ep_cells:
+            try:
+                if lbl.cget("image"):
+                    continue
+                payload = self._ep_payload(kind, eid)
+                if payload is not _MISS and payload:
+                    img = self.cached_image(key, payload)
+                    if img is not None:
+                        lbl.configure(image=img, width=38, height=32, text="")
+            except tk.TclError:
+                return
+        self.root.after(250, self._ep_poll)
+
+    def _ep_pick(self, name, kind, eid):
+        self._ph_clear()
+        try:
+            self.entry.insert("insert", name + " ")
+            self.entry.focus_set()
+        except tk.TclError:
+            pass
+        rec = [t for t in (self.cfg.get("recent_emotes") or []) if t[0] != name]
+        rec.insert(0, [name, eid, kind])
+        self.cfg["recent_emotes"] = rec[:24]
+        save_config(self.cfg)
+
+    def _load_tw_emotes(self):
+        """Смайлы, доступные пользователю на Twitch (Helix, до 3 страниц)."""
+        token = self.cfg.get("token", "")
+        cid = self.cfg.get("client_id", "")
+        uid = self.cfg.get("user_id", "")
+        if not (token and cid and uid):
+            return
+        out, cursor = [], ""
+        for _ in range(3):
+            params = {"user_id": uid}
+            if cursor:
+                params["after"] = cursor
+            code, resp = helix("GET", "chat/emotes/user", token, cid, params)
+            if code != 200 or not isinstance(resp, dict):
+                break
+            for e in resp.get("data") or []:
+                if e.get("name") and e.get("id"):
+                    out.append({"name": e["name"], "id": e["id"]})
+            cursor = ((resp.get("pagination") or {}).get("cursor")) or ""
+            if not cursor:
+                break
+        self._tw_emotes = out
+        dbg("tw emotes:", len(out))
+
     # ---------- внешний вид ----------
 
     def apply_look(self):
@@ -2542,6 +2803,8 @@ class OverlayApp:
             if self._key_pressed(self.cfg["key_frameless"]["vk"]):
                 self.frameless.set(not self.frameless.get())
                 self.apply_frameless()
+            if self._key_pressed(self.cfg["key_expand"]["vk"]):
+                self.set_expanded(not self.expanded)
         self.root.after(120, self.poll_keys)
 
     def rebind_key(self, which, title, on_done=None):
@@ -2563,8 +2826,9 @@ class OverlayApp:
             if e.keycode in (16, 17, 18):  # Shift/Ctrl/Alt сами по себе не подходят
                 lbl.configure(text=T("d_key_mod"))
                 return
-            other = "key_frameless" if which == "key_clickthrough" else "key_clickthrough"
-            if e.keycode == self.cfg[other]["vk"]:
+            others = [k for k in ("key_frameless", "key_clickthrough", "key_expand")
+                      if k != which]
+            if any(e.keycode == self.cfg[o]["vk"] for o in others):
                 lbl.configure(text=T("d_key_taken"))
                 return
             self.cfg[which] = {"vk": int(e.keycode), "name": e.keysym.upper()
@@ -3129,7 +3393,7 @@ class OverlayApp:
         size = max(14, int(self.cfg.get("font_size", 11) * 1.5))
         for kind, hot_color in (("ban", "#ff6b6b"), ("timeout", FG),
                                 ("warn", "#ffcf5c"), ("delete", FG),
-                                ("announce", ACCENT)):
+                                ("announce", ACCENT), ("emote", ACCENT)):
             n64 = draw_mod_icon(kind, size, SYS_FG)
             h64 = draw_mod_icon(kind, size, hot_color)
             if not n64 or not h64:
@@ -3143,6 +3407,19 @@ class OverlayApp:
             self._icon_hot[kind] = ph
             self._icon_to_hot[str(pn)] = ph
             self._icon_to_norm[str(ph)] = pn
+        # кнопки на панели ввода могли уже существовать — обновляем их картинки
+        eb = getattr(self, "emote_btn", None)
+        if eb is not None:
+            try:
+                eb.configure(image=self._icon_norm.get("emote") or "")
+            except tk.TclError:
+                pass
+        ab = getattr(self, "announce_btn", None)
+        if ab is not None and getattr(self, "_announce_shown", False):
+            try:
+                ab.configure(image=self._icon_norm.get("announce") or "")
+            except tk.TclError:
+                pass
 
     def _insert_mod_icon(self, w, kind, mtag):
         img = getattr(self, "_icon_norm", {}).get(kind)
