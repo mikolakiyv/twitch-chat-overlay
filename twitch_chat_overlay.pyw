@@ -198,6 +198,7 @@ DEFAULTS = {
     "theme": "twitch",
     "lang": "ru",
     "active_tab": "*",
+    "layout": "tabs",
     "animations": True,
     "obs_chroma": False,
     "mod_icons": True,
@@ -227,6 +228,10 @@ STRINGS = {
         "fav_hint": "Клик — добавить канал в список выше",
         "set_hint": "Клик — загрузить набор, ✕ — удалить",
         "fav_empty": "Пусто. Наберите каналы выше и нажмите «★ в избранное».",
+        "s_layout": "Раскладка",
+        "lay_tabs": "Вкладки",
+        "lay_unified": "Общая лента",
+        "lay_columns": "Колонки",
         "s_account": "Аккаунт",
         "s_mention": "Упоминания (@ник)",
         "s_modes": "РЕЖИМЫ",
@@ -353,6 +358,10 @@ STRINGS = {
         "fav_hint": "Click to add a channel to the list above",
         "set_hint": "Click to load a set, ✕ to delete",
         "fav_empty": "Empty. Type channels above and click “★ favorite”.",
+        "s_layout": "Layout",
+        "lay_tabs": "Tabs",
+        "lay_unified": "Unified",
+        "lay_columns": "Columns",
         "s_account": "Account",
         "s_mention": "Mentions (@name)",
         "s_modes": "MODES",
@@ -1653,6 +1662,7 @@ class OverlayApp:
         self.topmost = tk.BooleanVar(value=True)
         self.theme_var = tk.StringVar(value=cfg.get("theme", "twitch"))
         self.lang_var = tk.StringVar(value=cfg.get("lang", "ru"))
+        self.layout_var = tk.StringVar(value=cfg.get("layout", "tabs"))
         self.anim_enabled = tk.BooleanVar(value=bool(cfg.get("animations", True)))
         self.obs_chroma = tk.BooleanVar(value=bool(cfg.get("obs_chroma")))
         self.settings_win = None
@@ -1728,14 +1738,20 @@ class OverlayApp:
         self.entry.bind("<FocusOut>", lambda e: self._ph_set())
         self._ph_set()
 
-        # --- ленты чата: "*" — общий поток, плюс по одной на канал (вкладки) ---
+        # --- ленты чата: "*" — общий поток, плюс по одной на канал ---
         self.tab_bar = tk.Frame(frame, bg=BAR_BG)
         self._tab_btns = {}
         self.active_tab = "*"
         self.unread = {}  # канал -> {"n": непрочитанные, "hl": упоминания/ответы}
+        self.layout = self.cfg.get("layout", "tabs")  # tabs | unified | columns
+        # feed_area — контейнер лент; в нём grid: строка 0 — заголовки колонок,
+        # строка 1 — сами ленты (для режима «колонки»); в остальных режимах
+        # одна лента растягивается на всю ширину
+        self.feed_area = tk.Frame(frame, bg=BG)
+        self._col_headers = {}  # канал -> Label заголовка колонки
         self.texts = {"*": self._make_text()}
         self.text = self.texts["*"]
-        self.text.pack(fill="both", expand=True)
+        self.feed_area.pack(fill="both", expand=True)
 
         self.grip = tk.Label(frame, text="◢", bg=BG, fg=GRIP_FG,
                              cursor="size_nw_se", font=("Segoe UI", 9))
@@ -1945,6 +1961,13 @@ class OverlayApp:
         rb = dict(bg=BG, fg=FG, activebackground=BG, activeforeground=FG,
                   selectcolor=ENTRY_BG, font=lbl_font, highlightthickness=0,
                   bd=0, cursor="hand2")
+        r = row()
+        label(r, "s_layout")
+        for val, key in (("tabs", "lay_tabs"), ("unified", "lay_unified"),
+                         ("columns", "lay_columns")):
+            tk.Radiobutton(r, text=T(key), variable=self.layout_var, value=val,
+                           command=lambda: self.set_layout(self.layout_var.get()),
+                           **rb).pack(side="left", padx=(0, 8))
         r = row()
         label(r, "m_theme")
         tk.Radiobutton(r, text="Twitch", variable=self.theme_var, value="twitch",
@@ -2177,6 +2200,9 @@ class OverlayApp:
         for b in self.tab_bar.winfo_children():
             b.configure(bg=BAR_BG)
         self._style_tabs()
+        for h in self._col_headers.values():
+            h.configure(bg=BAR_BG, fg=SYS_FG)
+        self._style_col_headers()
         self.grip.configure(bg=BG, fg=GRIP_FG)
         self.apply_look()
 
@@ -2256,7 +2282,7 @@ class OverlayApp:
 
     def update_input_bar(self):
         if self.cfg.get("token") and self.cfg.get("login"):
-            self.input_bar.pack(side="bottom", fill="x", before=self.text)
+            self.input_bar.pack(side="bottom", fill="x", before=self.feed_area)
             self.update_chan_btn()
         else:
             self.input_bar.pack_forget()
@@ -2405,6 +2431,7 @@ class OverlayApp:
 
     def _paint_chat_bg(self, color):
         self.frame.configure(bg=color)
+        self.feed_area.configure(bg=color)
         for w in self.texts.values():
             w.configure(bg=color)
         self.grip.configure(bg=color)
@@ -2489,8 +2516,8 @@ class OverlayApp:
                 self.sys_message(T("textonly_on", self.cfg["key_frameless"]["name"]))
         else:
             self.frame.pack_configure(padx=1, pady=1)
-            self.bar.pack(fill="x", before=self.text)
-            if len(self.cfg.get("channels") or []) > 1:
+            self.bar.pack(fill="x", before=self.feed_area)
+            if self.layout == "tabs" and len(self.cfg.get("channels") or []) > 1:
                 self.tab_bar.pack(fill="x", after=self.bar)
             self.update_input_bar()
             self.grip.place(relx=1.0, rely=1.0, anchor="se")
@@ -2642,8 +2669,8 @@ class OverlayApp:
                 self.texts[ch] = self._make_text()
         if self.cfg.get("active_tab") not in self.texts:
             self.cfg["active_tab"] = "*"
-        self.switch_tab(self.cfg["active_tab"], force=True)
-        self._rebuild_tabs()
+        self.active_tab = self.cfg["active_tab"]
+        self._apply_layout()
         self.apply_look()  # новые ленты вкладок докрашиваются под текущий режим
         self.clear_chat()
         self.update_chan_btn()
@@ -2869,8 +2896,8 @@ class OverlayApp:
                 continue
             if self._render_into(w, sel):
                 mention_any = True
-            # счётчики непрочитанных для неактивных вкладок каналов
-            if key != self.active_tab and key != "*":
+            # счётчики непрочитанных для невидимых сейчас лент каналов
+            if key != "*" and not w.winfo_ismapped():
                 msgs = [(it, h) for it, h in sel if it[0] == "msg"]
                 if msgs:
                     c = self.unread.setdefault(key, {"n": 0, "hl": 0})
@@ -2901,20 +2928,24 @@ class OverlayApp:
         if last > maxm:
             w.delete("1.0", "%d.0" % (last - maxm + 1))
         w.configure(state="disabled")
-        if w is self.text:
+        try:
+            visible = bool(w.winfo_ismapped())
+        except tk.TclError:
+            visible = False
+        if visible:
             if at_bottom:
                 w.see("end")
-            else:
-                # пользователь листает историю — считаем новые сообщения внизу
+            elif w is self.text and self.layout != "columns" and not self.frameless.get():
+                # пользователь листает историю — счётчик новых снизу (одна лента)
                 fresh = sum(1 for it, _ in flagged if it[0] == "msg")
-                if fresh and not self.frameless.get():
+                if fresh:
                     self.newmsg_count += fresh
                     self._show_newmsg_btn()
         return hit_any
 
     def _make_text(self):
         """Создаёт ленту чата со всеми тегами и биндами (одна на вкладку)."""
-        w = tk.Text(self.frame, bg=BG, fg=FG, bd=0, highlightthickness=0,
+        w = tk.Text(self.feed_area, bg=BG, fg=FG, bd=0, highlightthickness=0,
                     wrap="word", state="disabled", padx=8, pady=6,
                     cursor="arrow", font=self.font_msg, spacing1=3, spacing3=1,
                     selectbackground=SELECT_BG)
@@ -2935,7 +2966,7 @@ class OverlayApp:
             c.destroy()
         self._tab_btns = {}
         chans = self.cfg.get("channels") or []
-        if len(chans) < 2:
+        if self.layout != "tabs" or len(chans) < 2:
             self.tab_bar.pack_forget()
             return
         for key, text in [("*", T("tab_all"))] + [(c, "#" + c) for c in chans]:
@@ -2977,25 +3008,103 @@ class OverlayApp:
             return
         self.newmsg_count = 0
         self.newmsg_btn.place_forget()
-        try:
-            if self.text.winfo_exists():
-                self.text.pack_forget()
-        except tk.TclError:
-            pass
         self.active_tab = key
         self.unread.pop(key, None)  # открыли вкладку — счётчик сброшен
         self.cfg["active_tab"] = key
         save_config(self.cfg)
-        self.text = self.texts[key]
-        self.text.pack(fill="both", expand=True)
-        self.grip.lift()
-        self.text.see("end")
-        self._style_tabs()
         # на вкладке канала сообщения отправляются в него
         chans = self.cfg.get("channels") or []
         if key in chans:
             self.send_index = chans.index(key)
             self.update_chan_btn()
+        self._apply_layout()
+
+    def set_layout(self, mode):
+        self.layout = mode if mode in ("tabs", "unified", "columns") else "tabs"
+        self.cfg["layout"] = self.layout
+        save_config(self.cfg)
+        self.newmsg_count = 0
+        self.newmsg_btn.place_forget()
+        self._apply_layout()
+
+    def _col_header(self, ch):
+        h = self._col_headers.get(ch)
+        if h is None or not h.winfo_exists():
+            h = tk.Label(self.feed_area, text="#" + ch, bg=BAR_BG, fg=SYS_FG,
+                         font=("Segoe UI", 9, "bold"), pady=2, cursor="hand2")
+            h.bind("<Button-1>", lambda e, c=ch: self._focus_column(c))
+            self._col_headers[ch] = h
+        return h
+
+    def _focus_column(self, ch):
+        chans = self.cfg.get("channels") or []
+        if ch in chans:
+            self.send_index = chans.index(ch)
+            self.text = self.texts[ch]
+            self.update_chan_btn()
+            self._style_col_headers()
+
+    def _style_col_headers(self):
+        chans = (self.cfg.get("channels") or [])[:4]
+        focus = chans[self.send_index] if self.send_index < len(chans) else (
+            chans[0] if chans else None)
+        for ch, h in self._col_headers.items():
+            try:
+                if h.winfo_ismapped():
+                    h.configure(bg=BAR_BG, fg=ACCENT if ch == focus else SYS_FG)
+            except tk.TclError:
+                pass
+
+    def _apply_layout(self):
+        """Раскладывает feed_area под режим: вкладки / общая лента / колонки."""
+        fa = self.feed_area
+        for w in self.texts.values():
+            try:
+                w.grid_forget()
+            except tk.TclError:
+                pass
+        for h in self._col_headers.values():
+            try:
+                h.grid_forget()
+            except tk.TclError:
+                pass
+        for i in range(8):
+            fa.grid_columnconfigure(i, weight=0, uniform="")
+        fa.grid_rowconfigure(0, weight=0)
+        fa.grid_rowconfigure(1, weight=1)
+        chans = self.cfg.get("channels") or []
+
+        if self.layout == "columns" and chans:
+            cols = chans[:4]
+            for i, ch in enumerate(cols):
+                self._col_header(ch).grid(row=0, column=i, sticky="ew", padx=(0, 1))
+                self.texts[ch].grid(row=1, column=i, sticky="nsew", padx=(0, 1))
+                fa.grid_columnconfigure(i, weight=1, uniform="cols")
+            focus = cols[self.send_index] if self.send_index < len(cols) else cols[0]
+            self.text = self.texts[focus]
+            self.tab_bar.pack_forget()
+            self._style_col_headers()
+        elif self.layout == "unified":
+            self.active_tab = "*"
+            self.texts["*"].grid(row=0, column=0, rowspan=2, sticky="nsew")
+            fa.grid_columnconfigure(0, weight=1)
+            fa.grid_rowconfigure(0, weight=1)
+            self.text = self.texts["*"]
+            self.tab_bar.pack_forget()
+        else:  # tabs
+            key = self.active_tab if self.active_tab in self.texts else "*"
+            self.texts[key].grid(row=0, column=0, rowspan=2, sticky="nsew")
+            fa.grid_columnconfigure(0, weight=1)
+            fa.grid_rowconfigure(0, weight=1)
+            self.text = self.texts[key]
+            self._rebuild_tabs()
+            self._style_tabs()
+
+        self.grip.lift()
+        try:
+            self.text.see("end")
+        except tk.TclError:
+            pass
 
     def user_tag(self, w, login):
         """Тег «клик по нику -> профиль twitch.tv/login» (создаётся один раз)."""
