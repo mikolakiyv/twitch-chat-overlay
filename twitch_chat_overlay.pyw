@@ -185,6 +185,8 @@ DEBUG = "--debug" in sys.argv
 
 DEFAULTS = {
     "channels": [],
+    "favorites": [],
+    "sets": {},
     "opacity": 0.88,
     "font_size": 11,
     "width": 380,
@@ -216,6 +218,15 @@ STRINGS = {
         "hint_start": "Правый клик или ⚙ — настройки · %s — сквозные клики · %s — только текст",
         "s_channels": "Каналы",
         "s_apply": "OK",
+        "s_fav": "Избранное",
+        "s_sets": "Наборы",
+        "s_addfav": "★ в избранное",
+        "s_saveset": "＋ набор",
+        "set_name_title": "Сохранить набор",
+        "set_name_label": "Название набора (напр. «вечер»):",
+        "fav_hint": "Клик — добавить канал в список выше",
+        "set_hint": "Клик — загрузить набор, ✕ — удалить",
+        "fav_empty": "Пусто. Наберите каналы выше и нажмите «★ в избранное».",
         "s_account": "Аккаунт",
         "s_mention": "Упоминания (@ник)",
         "s_modes": "РЕЖИМЫ",
@@ -333,6 +344,15 @@ STRINGS = {
         "hint_start": "Right-click or ⚙ — settings · %s — click-through · %s — text only",
         "s_channels": "Channels",
         "s_apply": "OK",
+        "s_fav": "Favorites",
+        "s_sets": "Sets",
+        "s_addfav": "★ favorite",
+        "s_saveset": "＋ set",
+        "set_name_title": "Save set",
+        "set_name_label": "Set name (e.g. “evening”):",
+        "fav_hint": "Click to add a channel to the list above",
+        "set_hint": "Click to load a set, ✕ to delete",
+        "fav_empty": "Empty. Type channels above and click “★ favorite”.",
         "s_account": "Account",
         "s_mention": "Mentions (@name)",
         "s_modes": "MODES",
@@ -614,6 +634,23 @@ def load_config():
         if c and c not in chans:
             chans.append(c)
     cfg["channels"] = chans
+    favs = []
+    for c in cfg.get("favorites") or []:
+        c = extract_channel(str(c))
+        if c and c not in favs:
+            favs.append(c)
+    cfg["favorites"] = favs
+    sets = {}
+    if isinstance(cfg.get("sets"), dict):
+        for name, chlist in cfg["sets"].items():
+            clean = []
+            for c in (chlist or []):
+                c = extract_channel(str(c))
+                if c and c not in clean:
+                    clean.append(c)
+            if str(name).strip() and clean:
+                sets[str(name).strip()[:24]] = clean
+    cfg["sets"] = sets
     for key, default in (("key_clickthrough", DEFAULTS["key_clickthrough"]),
                          ("key_frameless", DEFAULTS["key_frameless"])):
         v = cfg.get(key)
@@ -1809,6 +1846,30 @@ class OverlayApp:
         self.set_chan_entry.bind("<Return>", lambda e: self._apply_channels_from_settings())
         chip_btn(r, T("s_apply"), self._apply_channels_from_settings).pack(side="left", padx=(6, 0))
 
+        # --- избранные каналы ---
+        r = row()
+        label(r, "s_fav")
+        favwrap = tk.Frame(r, bg=BG)
+        favwrap.pack(side="left", fill="x", expand=True)
+        favs = self.cfg.get("favorites") or []
+        if favs:
+            for ch in favs:
+                self._fav_chip(favwrap, ch)
+        else:
+            tk.Label(favwrap, text=T("fav_empty"), bg=BG, fg=SYS_FG,
+                     font=("Segoe UI", 8)).pack(side="left")
+        chip_btn(r, T("s_addfav"), self._add_favorite).pack(side="left", padx=(6, 0))
+
+        # --- сохранённые наборы ---
+        sets = self.cfg.get("sets") or {}
+        r = row()
+        label(r, "s_sets")
+        setwrap = tk.Frame(r, bg=BG)
+        setwrap.pack(side="left", fill="x", expand=True)
+        for nm in sorted(sets):
+            self._set_chip(setwrap, nm)
+        chip_btn(r, T("s_saveset"), self._save_set).pack(side="left", padx=(6, 0))
+
         r = row()
         label(r, "s_account")
         if self.cfg.get("login"):
@@ -1919,6 +1980,81 @@ class OverlayApp:
         if chans and chans != (self.cfg.get("channels") or []):
             self.send_index = 0
             self.connect(chans)
+        self.refresh_settings()
+
+    def _fav_chip(self, parent, ch):
+        f = tk.Frame(parent, bg=CHIPBTN_BG)
+        f.pack(side="left", padx=(0, 4), pady=1)
+        lbl = tk.Label(f, text="#" + ch, bg=CHIPBTN_BG, fg=FG,
+                       font=("Segoe UI", 9), padx=6, pady=2, cursor="hand2")
+        lbl.pack(side="left")
+        Tooltip(lbl, "fav_hint")
+        lbl.bind("<Button-1>", lambda e, c=ch: self._fav_click(c))
+        x = tk.Label(f, text="✕", bg=CHIPBTN_BG, fg=SYS_FG,
+                     font=("Segoe UI", 8), padx=4, pady=2, cursor="hand2")
+        x.pack(side="left")
+        x.bind("<Button-1>", lambda e, c=ch: self._unfavorite(c))
+
+    def _set_chip(self, parent, name):
+        f = tk.Frame(parent, bg=CHIPBTN_BG)
+        f.pack(side="left", padx=(0, 4), pady=1)
+        lbl = tk.Label(f, text=name, bg=CHIPBTN_BG, fg=ACCENT,
+                       font=("Segoe UI", 9, "bold"), padx=7, pady=2, cursor="hand2")
+        lbl.pack(side="left")
+        Tooltip(lbl, "set_hint")
+        lbl.bind("<Button-1>", lambda e, n=name: self._load_set(n))
+        x = tk.Label(f, text="✕", bg=CHIPBTN_BG, fg=SYS_FG,
+                     font=("Segoe UI", 8), padx=4, pady=2, cursor="hand2")
+        x.pack(side="left")
+        x.bind("<Button-1>", lambda e, n=name: self._delete_set(n))
+
+    def _fav_click(self, ch):
+        # добавляем избранный канал в поле «Каналы», не трогая уже набранное
+        cur = parse_channels(self.set_chan_entry.get())
+        if ch not in cur:
+            cur.append(ch)
+        self.set_chan_entry.delete(0, "end")
+        self.set_chan_entry.insert(0, ", ".join(cur))
+
+    def _add_favorite(self):
+        favs = list(self.cfg.get("favorites") or [])
+        for ch in parse_channels(self.set_chan_entry.get()):
+            if ch not in favs:
+                favs.append(ch)
+        self.cfg["favorites"] = favs
+        save_config(self.cfg)
+        self.refresh_settings()
+
+    def _unfavorite(self, ch):
+        self.cfg["favorites"] = [c for c in (self.cfg.get("favorites") or []) if c != ch]
+        save_config(self.cfg)
+        self.refresh_settings()
+
+    def _save_set(self):
+        chans = parse_channels(self.set_chan_entry.get())
+        if not chans:
+            return
+        name = ask_text(self.root, T("set_name_title"), T("set_name_label"), "")
+        if not name or not name.strip():
+            return
+        sets = dict(self.cfg.get("sets") or {})
+        sets[name.strip()[:24]] = chans
+        self.cfg["sets"] = sets
+        save_config(self.cfg)
+        self.refresh_settings()
+
+    def _load_set(self, name):
+        chans = (self.cfg.get("sets") or {}).get(name)
+        if chans:
+            self.send_index = 0
+            self.connect(list(chans))
+        self.refresh_settings()
+
+    def _delete_set(self, name):
+        sets = dict(self.cfg.get("sets") or {})
+        sets.pop(name, None)
+        self.cfg["sets"] = sets
+        save_config(self.cfg)
         self.refresh_settings()
 
     def _save_mention_entry(self, event=None):
