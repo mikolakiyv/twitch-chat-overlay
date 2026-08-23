@@ -25,6 +25,7 @@ import queue
 import random
 import re
 import socket
+import ssl
 import sys
 import threading
 import urllib.error
@@ -173,6 +174,12 @@ def dwm_round(widget, small=False):
 apply_palette("twitch")
 
 CHROMA_KEY = "#ff00ff"  # пурпурный фон для захвата окна в OBS (фильтр «Цветовой ключ»)
+
+# единый TLS-контекст с проверкой сертификатов на все сетевые запросы —
+# делаем верификацию явной и одинаковой везде (а не полагаемся на умолчание)
+SSL_CTX = ssl.create_default_context()
+SSL_CTX.check_hostname = True
+SSL_CTX.verify_mode = ssl.CERT_REQUIRED
 
 DEBUG = "--debug" in sys.argv
 
@@ -762,7 +769,7 @@ def fetch_emote(eid):
             # format=default: статичные приходят PNG, анимированные — GIF
             url = "https://static-cdn.jtvnw.net/emoticons/v2/%s/default/dark/1.0" % eid
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=6) as r:
+            with urllib.request.urlopen(req, timeout=6, context=SSL_CTX) as r:
                 raw = r.read()
             os.makedirs(CACHE_DIR, exist_ok=True)
             if raw[:6] in (b"GIF87a", b"GIF89a"):
@@ -797,7 +804,7 @@ def fetch_badge_maps(channels):
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0",
         })
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=10, context=SSL_CTX) as r:
             data = json.loads(r.read().decode("utf-8"))
         d = data.get("data") or {}
         for b in (d.get("badges") or []):
@@ -842,7 +849,7 @@ def fetch_7tv_json(path):
     for i in _rotated(len(urls), SEVENTV_ROUTE["api"]):
         try:
             req = urllib.request.Request(urls[i], headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=6 if i < 2 else 9) as r:
+            with urllib.request.urlopen(req, timeout=6 if i < 2 else 9, context=SSL_CTX) as r:
                 data = json.loads(r.read().decode("utf-8"))
             SEVENTV_ROUTE["api"] = i
             return data
@@ -977,7 +984,7 @@ def fetch_7tv_image(eid):
             continue
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=6 if i == 0 else 9) as r:
+            with urllib.request.urlopen(req, timeout=6 if i == 0 else 9, context=SSL_CTX) as r:
                 raw = r.read()
         except urllib.error.HTTPError as e:
             if i == 0 and e.code == 404:
@@ -1021,7 +1028,7 @@ def fetch_badge_image(url):
                 data = base64.b64encode(f.read()).decode("ascii")
         else:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=6) as r:
+            with urllib.request.urlopen(req, timeout=6, context=SSL_CTX) as r:
                 raw = r.read()
             os.makedirs(BADGE_CACHE_DIR, exist_ok=True)
             write_cache_file(path, raw)
@@ -1077,9 +1084,11 @@ def validate_token(token):
     if not re.fullmatch(r"[A-Za-z0-9]{20,64}", token):
         return None
     try:
-        req = urllib.request.Request("https://id.twitch.tv/oauth2/validate",
-                                     headers={"Authorization": "OAuth " + token})
-        with urllib.request.urlopen(req, timeout=10) as r:
+        url = "https://id.twitch.tv/oauth2/validate"
+        if not url.startswith("https://"):  # токен уходит только по TLS
+            return None
+        req = urllib.request.Request(url, headers={"Authorization": "OAuth " + token})
+        with urllib.request.urlopen(req, timeout=10, context=SSL_CTX) as r:
             data = json.loads(r.read().decode("utf-8"))
         login = (data.get("login") or "").lower()
         if login:
@@ -1097,6 +1106,8 @@ MOD_SCOPES = ("moderator:manage:banned_users", "moderator:manage:chat_messages")
 def helix(method, path, token, client_id, params=None, body=None):
     """Запрос к Helix API. Возвращает (код, dict|None); (0, None) — сеть недоступна."""
     url = "https://api.twitch.tv/helix/" + path
+    if not url.startswith("https://"):  # токен уходит только по TLS
+        return 0, None
     if params:
         url += "?" + urllib.parse.urlencode(params)
     data = json.dumps(body).encode("utf-8") if body is not None else None
@@ -1106,7 +1117,7 @@ def helix(method, path, token, client_id, params=None, body=None):
         "Content-Type": "application/json",
     })
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=10, context=SSL_CTX) as r:
             raw = r.read()
             return r.status, (json.loads(raw.decode("utf-8")) if raw else {})
     except urllib.error.HTTPError as e:
@@ -1236,7 +1247,8 @@ class IrcThread(threading.Thread):
             segs = self._apply_7tv(self._segments(text, tags.get("emotes", "")), channel)
             self.put(("msg", channel, name, tags.get("color", ""), segs, action,
                       resolve_badges(self.badge_maps, channel, tags.get("badges", "")),
-                      login.lower(), tags.get("user-id", ""), tags.get("id", "")))
+                      login.lower(), tags.get("user-id", ""), tags.get("id", ""),
+                      tags.get("reply-parent-user-login", "").lower()))
         elif cmd == "USERSTATE":
             badges = tags.get("badges", "")
             is_mod = tags.get("mod") == "1" or "broadcaster/" in badges
@@ -1257,7 +1269,8 @@ class IrcThread(threading.Thread):
                 self.put(("msg", channel, name, tags.get("color", ""), segs, False,
                           resolve_badges(self.badge_maps, channel, tags.get("badges", "")),
                           (tags.get("login") or "").lower(),
-                          tags.get("user-id", ""), tags.get("id", "")))
+                          tags.get("user-id", ""), tags.get("id", ""),
+                          tags.get("reply-parent-user-login", "").lower()))
         elif cmd == "NOTICE":
             if trailing:
                 low = trailing.lower()
@@ -1682,6 +1695,7 @@ class OverlayApp:
         self.tab_bar = tk.Frame(frame, bg=BAR_BG)
         self._tab_btns = {}
         self.active_tab = "*"
+        self.unread = {}  # канал -> {"n": непрочитанные, "hl": упоминания/ответы}
         self.texts = {"*": self._make_text()}
         self.text = self.texts["*"]
         self.text.pack(fill="both", expand=True)
@@ -2482,6 +2496,7 @@ class OverlayApp:
         else:
             self.title_lbl.configure(text="Twitch")
         # ленты вкладок: по одной на канал + общая "*"
+        self.unread = {}  # смена набора каналов — счётчики обнуляем
         for ch in list(self.texts.keys()):
             if ch != "*" and ch not in channels:
                 self.texts[ch].destroy()
@@ -2691,20 +2706,43 @@ class OverlayApp:
         full = " ".join(s[1] if s[0] == "t" else s[3] for s in segs)
         return bool(self._mention_re.search(full))
 
+    def _msg_highlight(self, item):
+        """Упоминание ИЛИ ответ (reply) на моё сообщение — подсветка + счётчик hl."""
+        if item[0] != "msg":
+            return False
+        if self._msg_mention(item):
+            return True
+        reply_parent = item[10] if len(item) > 10 else ""
+        me = (self.cfg.get("login") or "").lower()
+        return bool(reply_parent and me and reply_parent == me)
+
     def render_batch(self, items):
         """Раскладывает пачку по лентам: общий поток «*» + вкладки каналов."""
         if not items:
             return
-        flagged = [(it, self._msg_mention(it)) for it in items]
+        flagged = [(it, self._msg_highlight(it)) for it in items]
         mention_any = False
+        changed = False
         for key, w in list(self.texts.items()):
             if key == "*":
                 sel = flagged
             else:
                 sel = [(it, hit) for it, hit in flagged
                        if it[0] == "sys" or (it[0] == "msg" and it[1] == key)]
-            if sel and self._render_into(w, sel):
+            if not sel:
+                continue
+            if self._render_into(w, sel):
                 mention_any = True
+            # счётчики непрочитанных для неактивных вкладок каналов
+            if key != self.active_tab and key != "*":
+                msgs = [(it, h) for it, h in sel if it[0] == "msg"]
+                if msgs:
+                    c = self.unread.setdefault(key, {"n": 0, "hl": 0})
+                    c["n"] += len(msgs)
+                    c["hl"] += sum(1 for _, h in msgs if h)
+                    changed = True
+        if changed:
+            self._style_tabs()
         if mention_any:
             self.flash_bar()
 
@@ -2777,8 +2815,24 @@ class OverlayApp:
     def _style_tabs(self):
         for key, b in self._tab_btns.items():
             active = key == self.active_tab
-            b.configure(fg=ACCENT if active else SYS_FG,
-                        font=("Segoe UI", 9, "bold" if active else "normal"))
+            base = T("tab_all") if key == "*" else "#" + key
+            c = None if active else self.unread.get(key)
+            n = c["n"] if c else 0
+            hl = c["hl"] if c else 0
+            cap = lambda v: "99+" if v > 99 else str(v)
+            if hl > 0:
+                text = "%s ✱%s" % (base, cap(hl))   # упоминания/ответы
+                fg = "#ff5c72"
+                weight = "bold"
+            elif n > 0:
+                text = "%s ·%s" % (base, cap(n))     # просто непрочитанные
+                fg = FG
+                weight = "normal"
+            else:
+                text = base
+                fg = ACCENT if active else SYS_FG
+                weight = "bold" if active else "normal"
+            b.configure(text=text, fg=fg, font=("Segoe UI", 9, weight))
 
     def switch_tab(self, key, force=False):
         if key not in self.texts:
@@ -2793,6 +2847,7 @@ class OverlayApp:
         except tk.TclError:
             pass
         self.active_tab = key
+        self.unread.pop(key, None)  # открыли вкладку — счётчик сброшен
         self.cfg["active_tab"] = key
         save_config(self.cfg)
         self.text = self.texts[key]
