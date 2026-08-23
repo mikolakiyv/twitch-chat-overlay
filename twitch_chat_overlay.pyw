@@ -249,6 +249,8 @@ STRINGS = {
         "s_fullscreen": "Во весь экран",
         "d_key_fullscreen": "Во весь экран",
         "tt_min": "Свернуть",
+        "live_now": "В эфире: %s",
+        "live_none": "Сейчас никто не стримит — показываю все каналы",
         "s_ghostinput": "Текст + поле ввода",
         "d_key_ghostinput": "Текст + поле ввода",
         "ghostinput_on": "Прозрачный чат с полем ввода. %s — вернуть окно.",
@@ -390,6 +392,8 @@ STRINGS = {
         "s_fullscreen": "Fullscreen",
         "d_key_fullscreen": "Fullscreen",
         "tt_min": "Minimize",
+        "live_now": "Live now: %s",
+        "live_none": "No one is live — showing all channels",
         "s_ghostinput": "Text + input box",
         "d_key_ghostinput": "Text + input box",
         "ghostinput_on": "Transparent chat with the input box. %s — bring the window back.",
@@ -1127,6 +1131,26 @@ def fetch_7tv_image(eid):
     return data
 
 
+def fetch_live_set(channels):
+    """Кто из каналов сейчас в эфире (GQL, без логина). set логинов или None."""
+    try:
+        q = "query($logins:[String!]!){users(logins:$logins){login stream{id}}}"
+        body = json.dumps({"query": q,
+                           "variables": {"logins": list(channels)[:35]}}).encode("utf-8")
+        req = urllib.request.Request(GQL_URL, data=body, headers={
+            "Client-ID": GQL_CLIENT_ID,
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0",
+        })
+        with urllib.request.urlopen(req, timeout=10, context=SSL_CTX) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        return {u["login"].lower() for u in (data.get("data") or {}).get("users") or []
+                if u and u.get("login") and u.get("stream")}
+    except Exception as e:
+        dbg("! live:", e)
+        return None
+
+
 def fetch_7tv_thumb(eid):
     """Статичное PNG-превью смайла 7TV для пикера: маленькое и быстрое,
     через зеркала (у анимированных — первый кадр). base64 или None."""
@@ -1778,6 +1802,10 @@ class OverlayApp:
         self.fullscreen = False
         self.fs_var = tk.BooleanVar(value=False)
         self._minimized = False
+        self._live = None          # set каналов в эфире (None = ещё не знаем)
+        self._live_dirty = False
+        self._live_applied = None
+        self._live_announced = False
         self._tw_emotes = None
         self.emote_win = None
         self.settings_win = None
@@ -2662,6 +2690,29 @@ class OverlayApp:
 
     # ---------- F10: компактный оверлей <-> развёрнутый мультичат ----------
 
+    def _announce_live(self):
+        """Системное сообщение о том, кто в эфире (один раз за разворот)."""
+        self._live_announced = True
+        chans = self.cfg.get("channels") or []
+        live = [c for c in chans if c in (self._live or set())]
+        if live and len(live) < len(chans):
+            self.sys_message(T("live_now", ", ".join("#" + c for c in live)))
+        elif not live and len(chans) > 1:
+            self.sys_message(T("live_none"))
+
+    def _refresh_live(self):
+        """Фоново обновить список каналов в эфире; результат заберёт poll_queue."""
+        chans = list(self.cfg.get("channels") or [])
+        if len(chans) < 2:
+            return
+
+        def run():
+            s = fetch_live_set(chans)
+            if s is not None:
+                self._live = s
+                self._live_dirty = True
+        DOWNLOAD_POOL.submit(run)
+
     def set_expanded(self, on):
         on = bool(on)
         if on == self.expanded:
@@ -2694,7 +2745,11 @@ class OverlayApp:
             self.root.geometry("%dx%d+%d+%d" % (g[2], g[3], g[0], g[1]))
             if len(self.cfg.get("channels") or []) > 1:
                 self.layout = "columns"
+            self._live_announced = False
+            self._refresh_live()
             self._apply_layout()
+            if self._live is not None and self.layout == "columns":
+                self._announce_live()
         else:
             self.cfg["exp_geometry"] = [self.root.winfo_x(), self.root.winfo_y(),
                                         self.root.winfo_width(), self.root.winfo_height()]
@@ -3238,6 +3293,11 @@ class OverlayApp:
                     badge_maps.update(bm)
                     badge_maps["_ready"] = True
                     seventv_maps.update(fetch_7tv_maps(channels, ids))
+                    if len(channels) > 1:
+                        live = fetch_live_set(channels)
+                        if live is not None:
+                            self._live = live
+                            self._live_dirty = True
                 except Exception as e:
                     dbg("! assets:", e)
                 if stop_event.wait(900):
@@ -3290,6 +3350,16 @@ class OverlayApp:
             except tk.TclError:
                 pass
         self._sync_announce_icon()  # статус модерки приходит из USERSTATE асинхронно
+        if self._live_dirty:
+            self._live_dirty = False
+            changed = (self._live or set()) != self._live_applied
+            self._live_applied = set(self._live or ())
+            if changed and self.expanded and self.layout == "columns":
+                self._apply_layout()
+                if not self._live_announced:
+                    self._announce_live()
+            elif changed and self.layout == "columns":
+                self._style_col_headers()
         self.root.after(60, self.poll_queue)
 
     def color_tag(self, w, color, login, body=False):
@@ -3579,13 +3649,14 @@ class OverlayApp:
             self._style_col_headers()
 
     def _style_col_headers(self):
-        chans = (self.cfg.get("channels") or [])[:4]
+        chans = self.cfg.get("channels") or []
         focus = chans[self.send_index] if self.send_index < len(chans) else (
             chans[0] if chans else None)
         for ch, h in self._col_headers.items():
             try:
-                if h.winfo_ismapped():
-                    h.configure(bg=BAR_BG, fg=ACCENT if ch == focus else SYS_FG)
+                live = self._live is not None and ch in self._live
+                h.configure(text="#%s%s" % (ch, " ●" if live else ""),
+                            bg=BAR_BG, fg=ACCENT if ch == focus else SYS_FG)
             except tk.TclError:
                 pass
 
@@ -3610,7 +3681,13 @@ class OverlayApp:
 
         bare = getattr(self, "_bare_now", False) or self._is_bare()
         if self.layout == "columns" and chans:
-            cols = chans[:4]
+            pool = chans
+            # в развёрнутом мультичате показываем только тех, кто сейчас в эфире
+            if self.expanded and self._live is not None:
+                live_cols = [c for c in chans if c in self._live]
+                if live_cols:
+                    pool = live_cols
+            cols = pool[:4]
             for i, ch in enumerate(cols):
                 if not bare:  # в «голом» режиме — только сами ленты, без шапок
                     self._col_header(ch).grid(row=0, column=i, sticky="ew", padx=(0, 1))
@@ -3620,7 +3697,8 @@ class OverlayApp:
                 fa.grid_columnconfigure(i, weight=1, uniform="cols")
             if bare:
                 fa.grid_rowconfigure(0, weight=1)
-            focus = cols[self.send_index] if self.send_index < len(cols) else cols[0]
+            cur = chans[self.send_index] if self.send_index < len(chans) else None
+            focus = cur if cur in cols else cols[0]
             self.text = self.texts[focus]
             self.tab_bar.pack_forget()
             self._style_col_headers()
