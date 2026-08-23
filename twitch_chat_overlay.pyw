@@ -214,7 +214,7 @@ DEFAULTS = {
     "key_frameless": {"vk": 120, "name": "F9"},
     "key_expand": {"vk": 121, "name": "F10"},
     "key_fullscreen": {"vk": 122, "name": "F11"},
-    "key_ghostinput": {"vk": 118, "name": "F7"},
+    "key_ghostinput": {"vk": 45, "name": "Insert"},
     "ghost_input": False,
     "exp_geometry": None,
     "recent_emotes": [],
@@ -709,6 +709,9 @@ def load_config():
         v = cfg.get(key)
         if not (isinstance(v, dict) and isinstance(v.get("vk"), int) and v.get("name")):
             cfg[key] = dict(default)
+    # F7 конфликтовала с браузерами (caret browsing) — старый дефолт мигрируем
+    if cfg.get("key_ghostinput") == {"vk": 118, "name": "F7"}:
+        cfg["key_ghostinput"] = dict(DEFAULTS["key_ghostinput"])
     return cfg
 
 
@@ -2830,10 +2833,13 @@ class OverlayApp:
         key = CHROMA_KEY if self.obs_chroma.get() else BG
         try:
             if self.ghost.get():
+                # красим и подложку окна: иначе её 1px виден как боковые рамки
+                self.root.configure(bg=key)
                 self._paint_chat_bg(key)
                 self.root.attributes("-alpha", 1.0)
                 self.root.attributes("-transparentcolor", key)
             else:
+                self.root.configure(bg=BORDER)
                 self._paint_chat_bg(BG)
                 self.root.attributes("-transparentcolor", "")
                 self.root.attributes("-alpha", float(self.cfg.get("opacity", 0.88)))
