@@ -7,7 +7,7 @@
 <meta name="description" content="Лёгкий оверлей чата Twitch для Windows: поверх всех окон, смайлы 7TV с анимацией, вкладки каналов, упоминания. Бесплатно, open source, без установки.">
 <meta property="og:title" content="Twitch Chat Overlay — чат поверх игры">
 <meta property="og:description" content="Смайлы 7TV с анимацией · вкладки каналов · работает в РФ без VPN · бесплатно и open source">
-<meta property="og:image" content="https://mikolakiyv.github.io/twitch-chat-overlay/screenshot_main.png">
+<meta property="og:image" content="https://mikolakiyv.github.io/twitch-chat-overlay/screenshot_main2.png">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%239147ff'/><rect x='18' y='24' width='64' height='38' rx='10' fill='white'/><path d='M30 58 L52 58 L34 78 Z' fill='white'/><circle cx='35' cy='43' r='4.5' fill='%239147ff'/><circle cx='50' cy='43' r='4.5' fill='%239147ff'/><circle cx='65' cy='43' r='4.5' fill='%239147ff'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -185,7 +185,7 @@
         </a>
         <a class="alt" href="https://github.com/mikolakiyv/twitch-chat-overlay/releases/latest/download/twitch-chat-overlay.zip">версия с исходниками .zip</a>
       </div>
-      <p class="meta"><span id="ver">v1.11.0</span> · ~17 МБ · <b>без установки</b> · Windows 10/11 · русский и английский</p>
+      <p class="meta"><span id="ver">v1.13.0</span> · ~18 МБ · <b>без установки</b> · Windows 10/11 · русский и английский</p>
     </div>
 
     <div class="scene" aria-hidden="true">
@@ -202,7 +202,7 @@
     <span>работает в РФ <b>без VPN</b></span>
     <span>смайлы <b>7TV + Twitch</b> с анимацией</span>
     <span><b>F9</b> — только текст поверх игры</span>
-    <span><b>F10</b> — развернуть в мультичат</span>
+    <span><b>F10</b> — мультичат: только каналы в эфире</span>
     <span>хромакей для <b>OBS</b> в один клик</span>
     <span>≈<b>60 МБ</b> памяти</span>
   </div>
@@ -211,7 +211,7 @@
     <h2>Что умеет <em>оверлей</em></h2>
     <div class="grid">
       <div class="f" style="--c:var(--green)"><b>Поверх всего</b><p>Держится над играми и приложениями. <kbd>F11</kbd> — во весь экран, кнопка «—» сворачивает в панель задач. Для игр — режим «оконный без рамки».</p></div>
-      <div class="f" style="--c:var(--coral)"><b>Только текст — <kbd>F9</kbd></b><p>Убирает рамку и фон: над игрой парит один чат, клики проходят насквозь. <kbd>F8</kbd> — сквозные клики. Все клавиши переназначаются.</p></div>
+      <div class="f" style="--c:var(--coral)"><b>Только текст — <kbd>F9</kbd></b><p>Убирает рамку и фон: над игрой парит один чат. <kbd>Insert</kbd> — то же, но с полем ввода: писать и вставлять смайлы прямо поверх игры. <kbd>F8</kbd> — сквозные клики. Клавиши переназначаются.</p></div>
       <div class="f" style="--c:var(--accent)"><b>Мультичат — <kbd>F10</kbd></b><p>Компактный оверлей разворачивается в большое окно: колонками открываются только каналы, которые сейчас в эфире (у живых — метка ●). Три раскладки: вкладки, общая лента, до 4 колонок.</p></div>
       <div class="f" style="--c:var(--pink)"><b>Смайлы Twitch и 7TV</b><p>Анимированные двигаются, как в чате. Пикер с поиском вставляет смайлы в сообщение. При блокировке 7TV картинки идут через зеркала — VPN не нужен.</p></div>
       <div class="f" style="--c:var(--blue)"><b>Как настоящий чат</b><p>Цвета ников, настоящие значки, клик по нику открывает профиль. Счётчики непрочитанных на вкладках, упоминания и ответы подсвечиваются, окно мигает.</p></div>
@@ -254,11 +254,12 @@
   <section>
     <h2>Скриншоты <em>без прикрас</em></h2>
     <div class="shots">
-      <figure class="shot"><img src="screenshot_main.png" width="460" alt="Окно оверлея: вкладки каналов, цветные ники, значки и смайлы 7TV" loading="lazy"><figcaption>Вкладки, значки, смайлы — обычный режим</figcaption></figure>
+      <figure class="shot"><img src="screenshot_main2.png" width="460" alt="Окно оверлея: вкладки каналов со счётчиком упоминаний, цветные ники, значки, анимированные смайлы и подсветка тега" loading="lazy"><figcaption>Вкладки, значки, смайлы, счётчик упоминаний — обычный режим</figcaption></figure>
       <figure class="shot"><img src="screenshot_textonly.png" width="484" alt="Режим «только текст»: чат парит без рамки и фона" loading="lazy"><figcaption>F9 — только текст поверх игры</figcaption></figure>
     </div>
     <div class="shots" style="margin-top:18px">
-      <figure class="shot"><img src="settings-panel.png" width="480" alt="Панель настроек: слайдеры, переключатели, темы и язык на одном экране" loading="lazy"><figcaption>Все настройки на одном экране</figcaption></figure>
+      <figure class="shot"><img src="screenshot_multichat.png" width="620" alt="Развёрнутый мультичат: три колонки живых каналов с метками ●, оффлайн-канал не открылся" loading="lazy"><figcaption>F10 — мультичат: открылись только каналы в эфире (●), четвёртый оффлайн — колонки нет</figcaption></figure>
+      <figure class="shot"><img src="settings-panel.png" width="420" alt="Панель настроек: слайдеры, переключатели, темы и язык на одном экране" loading="lazy"><figcaption>Все настройки на одном экране</figcaption></figure>
     </div>
   </section>
 
@@ -298,7 +299,8 @@
     VIP + nick("#a970ff", "vip_persona") + "у каждого канала своя вкладка, удобно",
     nick("#5c9dff", "quiet_boi") + "клик по нику открывает профиль",
     nick("#ff7f50", "kotleta") + "настройки одним экраном, наконец-то",
-    nick("#57d964", "modzilla") + "и всё это 17 мегабайт " + KAPPA,
+    nick("#57d964", "modzilla") + "F10 открыл только тех, кто в эфире <b style='color:#eb0400'>●</b>",
+    nick("#57d964", "modzilla") + "и всё это 18 мегабайт " + KAPPA,
     nick("#ff69b4", "dancer") + "анимация смайлов вкл/выкл в настройках"
   ];
   var feed = document.getElementById("feed");
