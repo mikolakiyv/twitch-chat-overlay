@@ -127,6 +127,7 @@ DEFAULTS = {
     "active_tab": "*",
     "animations": True,
     "obs_chroma": False,
+    "mod_icons": True,
     "key_clickthrough": {"vk": 119, "name": "F8"},
     "key_frameless": {"vk": 120, "name": "F9"},
     "max_messages": 150,
@@ -159,13 +160,18 @@ STRINGS = {
         "act_profile": "Открыть профиль",
         "act_delete": "Удалить сообщение",
         "act_timeout": "Таймаут 10 мин",
+        "act_warn": "Предупредить",
         "act_ban": "Забанить",
         "act_ban_confirm": "Точно забанить?",
+        "s_modicons": "Кнопки модерации в чате",
+        "ban_arm": "Ещё раз по ⊘ в течение 3 сек — бан %s",
+        "mod_warned": "⚠ %s получил предупреждение",
+        "warn_reason": "Предупреждение от модератора",
         "mod_deleted": "✂ Сообщение %s удалено",
         "mod_timeout": "⏱ Таймаут %s на 10 минут",
         "mod_banned": "🔨 %s забанен",
-        "mod_err_scope": ("Нет прав в токене: перелогиньтесь, отметив "
-                          "moderator:manage:banned_users и moderator:manage:chat_messages."),
+        "mod_err_scope": ("Нет прав в токене: перелогиньтесь, отметив moderator:manage:"
+                          "banned_users, chat_messages и warnings."),
         "mod_err_notmod": "Не получилось: похоже, у вас нет модерки на #%s.",
         "mod_err": "Модерация: ошибка %s",
         "chroma_on": ("Фон для захвата окна стал пурпурным. В OBS: правый клик по источнику → "
@@ -229,10 +235,11 @@ STRINGS = {
                           "    twitchtokengenerator.com\n"
                           "2. Выберите «Bot Chat Token» и войдите в Twitch\n"
                           "3. Скопируйте ACCESS TOKEN и вставьте сюда\n\n"
-                          "Модераторам: чтобы банить и удалять из оверлея,\n"
-                          "отметьте на сайте ещё два права:\n"
-                          "moderator:manage:banned_users и\n"
-                          "moderator:manage:chat_messages"),
+                          "Модераторам: чтобы банить, варнить и удалять\n"
+                          "из оверлея, отметьте на сайте ещё три права:\n"
+                          "moderator:manage:banned_users,\n"
+                          "moderator:manage:chat_messages,\n"
+                          "moderator:manage:warnings"),
         "d_login_get": "Получить токен (откроется браузер)",
         "d_login_note": "Токен хранится только на этом компьютере (зашифрован).",
         "d_login_btn": "Войти",
@@ -268,13 +275,18 @@ STRINGS = {
         "act_profile": "Open profile",
         "act_delete": "Delete message",
         "act_timeout": "Timeout 10 min",
+        "act_warn": "Warn",
         "act_ban": "Ban",
         "act_ban_confirm": "Really ban?",
+        "s_modicons": "Mod buttons in chat",
+        "ban_arm": "Click ⊘ again within 3 s to ban %s",
+        "mod_warned": "⚠ %s was warned",
+        "warn_reason": "Moderator warning",
         "mod_deleted": "✂ Message by %s deleted",
         "mod_timeout": "⏱ %s timed out for 10 minutes",
         "mod_banned": "🔨 %s banned",
-        "mod_err_scope": ("Token lacks moderator scopes: re-login with "
-                          "moderator:manage:banned_users and moderator:manage:chat_messages."),
+        "mod_err_scope": ("Token lacks moderator scopes: re-login with moderator:manage:"
+                          "banned_users, chat_messages and warnings."),
         "mod_err_notmod": "Failed: you don't seem to be a moderator on #%s.",
         "mod_err": "Moderation: error %s",
         "chroma_on": ("Window-capture background is now magenta. In OBS: right-click the source → "
@@ -338,10 +350,11 @@ STRINGS = {
                           "    twitchtokengenerator.com\n"
                           "2. Choose “Bot Chat Token” and log in to Twitch\n"
                           "3. Copy the ACCESS TOKEN and paste it here\n\n"
-                          "Moderators: to ban/delete from the overlay,\n"
-                          "also tick two scopes on that site:\n"
-                          "moderator:manage:banned_users and\n"
-                          "moderator:manage:chat_messages"),
+                          "Moderators: to ban/warn/delete from the overlay,\n"
+                          "also tick three scopes on that site:\n"
+                          "moderator:manage:banned_users,\n"
+                          "moderator:manage:chat_messages,\n"
+                          "moderator:manage:warnings"),
         "d_login_get": "Get token (opens browser)",
         "d_login_note": "The token is stored only on this PC (encrypted).",
         "d_login_btn": "Log in",
@@ -1528,6 +1541,8 @@ class OverlayApp:
         self._msg_meta = {}   # тег -> (канал, логин, имя, user_id, message_id)
         self._msg_seq = 0
         self._action_win = None
+        self._armed_bans = set()  # «первый клик по ⊘ сделан» (канал/логин)
+        self.mod_icons = tk.BooleanVar(value=bool(cfg.get("mod_icons", True)))
 
         root.overrideredirect(True)
         root.attributes("-topmost", True)
@@ -1748,6 +1763,8 @@ class OverlayApp:
                        command=self.apply_look, **chk).pack(side="left")
         tk.Checkbutton(row(), text=T("s_chroma"), variable=self.obs_chroma,
                        command=self.toggle_chroma, **chk).pack(side="left")
+        tk.Checkbutton(row(), text=T("s_modicons"), variable=self.mod_icons,
+                       command=self._save_mod_icons, **chk).pack(side="left")
 
         # --- вид: светлые слайдеры-пилюли ---
         header("s_appear")
@@ -2108,6 +2125,10 @@ class OverlayApp:
         for w in self.texts.values():
             w.configure(bg=color)
         self.grip.configure(bg=color)
+
+    def _save_mod_icons(self):
+        self.cfg["mod_icons"] = bool(self.mod_icons.get())
+        save_config(self.cfg)
 
     def toggle_chroma(self):
         self.cfg["obs_chroma"] = bool(self.obs_chroma.get())
@@ -2728,6 +2749,8 @@ class OverlayApp:
                      lambda: self._mod_action("delete", channel, uid, mid, name))
             item("act_timeout",
                  lambda: self._mod_action("timeout", channel, uid, mid, name))
+            item("act_warn",
+                 lambda: self._mod_action("warn", channel, uid, mid, name))
             item("act_ban",
                  lambda: self._mod_action("ban", channel, uid, mid, name),
                  danger=True, confirm=True)
@@ -2739,6 +2762,21 @@ class OverlayApp:
         dwm_round(win, small=True)
         win.focus_force()
         return "break"
+
+    def _icon_action(self, kind, mtag):
+        meta = self._msg_meta.get(mtag)
+        if not meta:
+            return
+        channel, login, name, uid, mid = meta
+        if kind == "ban":
+            key = channel + "/" + login
+            if key not in self._armed_bans:
+                self._armed_bans.add(key)
+                self.sys_message(T("ban_arm", name))
+                self.root.after(3000, lambda: self._armed_bans.discard(key))
+                return
+            self._armed_bans.discard(key)
+        self._mod_action(kind, channel, uid, mid, name)
 
     def _mod_action(self, kind, channel, uid, mid, name):
         """Модерация через Helix — в пуле, результат приходит в чат sys-строкой."""
@@ -2761,6 +2799,10 @@ class OverlayApp:
                 code, resp = helix("POST", "moderation/bans", token, cid, params,
                                    {"data": {"user_id": uid, "duration": 600}})
                 ok_msg = T("mod_timeout", name)
+            elif kind == "warn":
+                code, resp = helix("POST", "moderation/warnings", token, cid, params,
+                                   {"data": {"user_id": uid, "reason": T("warn_reason")}})
+                ok_msg = T("mod_warned", name)
             else:
                 code, resp = helix("POST", "moderation/bans", token, cid, params,
                                    {"data": {"user_id": uid}})
@@ -2809,6 +2851,23 @@ class OverlayApp:
                 w.image_create("end", image=bimg, padx=2)
         utag = self.user_tag(w, login or name)
         mtag = self.msg_meta_tag(w, channel, login or name.lower(), name, uid, mid)
+        # мод-иконки перед сообщением, как в мод-виде Twitch: бан/таймаут/варн/удалить
+        if (mtag and uid and self.mod_icons.get() and self._is_mod(channel)
+                and (login or name.lower()) != (self.cfg.get("login") or "").lower()):
+            for glyph, kind in (("⊘", "ban"), ("◷", "timeout"),
+                                ("⚠", "warn"), ("🗑", "delete")):
+                if kind == "delete" and not mid:
+                    continue
+                itag = "%s.%s" % (mtag, kind[0])
+                w.tag_configure(itag, foreground=SYS_FG, font=self.font_chip)
+                w.tag_bind(itag, "<Button-1>",
+                           lambda e, k=kind, t=mtag: self._icon_action(k, t) or "break")
+                w.tag_bind(itag, "<Enter>",
+                           lambda e, ww=w, it=itag: ww.tag_configure(it, foreground=FG))
+                w.tag_bind(itag, "<Leave>",
+                           lambda e, ww=w, it=itag: ww.tag_configure(it, foreground=SYS_FG))
+                w.insert("end", glyph, (itag, "nicklink"))
+                w.insert("end", " ")
         nick_tags = ((self.color_tag(w, color, name), "nicklink")
                      + ((utag,) if utag else ()) + ((mtag,) if mtag else ()))
         w.insert("end", name, nick_tags)
