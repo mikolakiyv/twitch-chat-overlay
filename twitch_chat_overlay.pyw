@@ -156,6 +156,18 @@ STRINGS = {
         "tab_all": "Все",
         "s_anim": "Анимация смайлов",
         "s_chroma": "Хромакей для OBS",
+        "act_profile": "Открыть профиль",
+        "act_delete": "Удалить сообщение",
+        "act_timeout": "Таймаут 10 мин",
+        "act_ban": "Забанить",
+        "act_ban_confirm": "Точно забанить?",
+        "mod_deleted": "✂ Сообщение %s удалено",
+        "mod_timeout": "⏱ Таймаут %s на 10 минут",
+        "mod_banned": "🔨 %s забанен",
+        "mod_err_scope": ("Нет прав в токене: перелогиньтесь, отметив "
+                          "moderator:manage:banned_users и moderator:manage:chat_messages."),
+        "mod_err_notmod": "Не получилось: похоже, у вас нет модерки на #%s.",
+        "mod_err": "Модерация: ошибка %s",
         "chroma_on": ("Фон для захвата окна стал пурпурным. В OBS: правый клик по источнику → "
                       "«Фильтры» → «Цветовой ключ», цвет — пурпурный. На вашем экране всё как раньше."),
         "chroma_off": "Хромакей для OBS выключен.",
@@ -216,7 +228,11 @@ STRINGS = {
                           "1. Нажмите «Получить токен» — откроется сайт\n"
                           "    twitchtokengenerator.com\n"
                           "2. Выберите «Bot Chat Token» и войдите в Twitch\n"
-                          "3. Скопируйте ACCESS TOKEN и вставьте сюда"),
+                          "3. Скопируйте ACCESS TOKEN и вставьте сюда\n\n"
+                          "Модераторам: чтобы банить и удалять из оверлея,\n"
+                          "отметьте на сайте ещё два права:\n"
+                          "moderator:manage:banned_users и\n"
+                          "moderator:manage:chat_messages"),
         "d_login_get": "Получить токен (откроется браузер)",
         "d_login_note": "Токен хранится только на этом компьютере (зашифрован).",
         "d_login_btn": "Войти",
@@ -249,6 +265,18 @@ STRINGS = {
         "tab_all": "All",
         "s_anim": "Animated emotes",
         "s_chroma": "OBS chroma key",
+        "act_profile": "Open profile",
+        "act_delete": "Delete message",
+        "act_timeout": "Timeout 10 min",
+        "act_ban": "Ban",
+        "act_ban_confirm": "Really ban?",
+        "mod_deleted": "✂ Message by %s deleted",
+        "mod_timeout": "⏱ %s timed out for 10 minutes",
+        "mod_banned": "🔨 %s banned",
+        "mod_err_scope": ("Token lacks moderator scopes: re-login with "
+                          "moderator:manage:banned_users and moderator:manage:chat_messages."),
+        "mod_err_notmod": "Failed: you don't seem to be a moderator on #%s.",
+        "mod_err": "Moderation: error %s",
         "chroma_on": ("Window-capture background is now magenta. In OBS: right-click the source → "
                       "Filters → Color Key, key color magenta. Your own screen is unchanged."),
         "chroma_off": "OBS chroma key is off.",
@@ -309,7 +337,11 @@ STRINGS = {
                           "1. Click “Get token” — opens\n"
                           "    twitchtokengenerator.com\n"
                           "2. Choose “Bot Chat Token” and log in to Twitch\n"
-                          "3. Copy the ACCESS TOKEN and paste it here"),
+                          "3. Copy the ACCESS TOKEN and paste it here\n\n"
+                          "Moderators: to ban/delete from the overlay,\n"
+                          "also tick two scopes on that site:\n"
+                          "moderator:manage:banned_users and\n"
+                          "moderator:manage:chat_messages"),
         "d_login_get": "Get token (opens browser)",
         "d_login_note": "The token is stored only on this PC (encrypted).",
         "d_login_btn": "Log in",
@@ -970,10 +1002,40 @@ def validate_token(token):
             data = json.loads(r.read().decode("utf-8"))
         login = (data.get("login") or "").lower()
         if login:
-            return {"token": token, "login": login, "scopes": data.get("scopes") or []}
+            return {"token": token, "login": login, "scopes": data.get("scopes") or [],
+                    "client_id": data.get("client_id") or "",
+                    "user_id": str(data.get("user_id") or "")}
     except Exception as e:
         dbg("! validate:", e)
     return None
+
+
+MOD_SCOPES = ("moderator:manage:banned_users", "moderator:manage:chat_messages")
+
+
+def helix(method, path, token, client_id, params=None, body=None):
+    """Запрос к Helix API. Возвращает (код, dict|None); (0, None) — сеть недоступна."""
+    url = "https://api.twitch.tv/helix/" + path
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={
+        "Authorization": "Bearer " + token,
+        "Client-Id": client_id,
+        "Content-Type": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            raw = r.read()
+            return r.status, (json.loads(raw.decode("utf-8")) if raw else {})
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read().decode("utf-8"))
+        except Exception:
+            return e.code, {}
+    except Exception as e:
+        dbg("! helix:", e)
+        return 0, None
 
 
 # ---------------------------------------------------------------- IRC поток
@@ -992,7 +1054,8 @@ class IrcThread(threading.Thread):
         self.stop_event = threading.Event()
         self.sock = None
         self.send_lock = threading.Lock()
-        self.userstate = {}  # канал -> (display-name, color) для эха своих сообщений
+        self.userstate = {}    # канал -> (имя, цвет, значки, есть_модерка)
+        self.channel_ids = {}  # канал -> twitch id (заполняет загрузчик карт)
         self.nick = self.login if token else "justinfan%d" % random.randint(10000, 99999)
 
     def stop(self):
@@ -1092,13 +1155,15 @@ class IrcThread(threading.Thread):
             segs = self._apply_7tv(self._segments(text, tags.get("emotes", "")), channel)
             self.put(("msg", channel, name, tags.get("color", ""), segs, action,
                       resolve_badges(self.badge_maps, channel, tags.get("badges", "")),
-                      login.lower()))
+                      login.lower(), tags.get("user-id", ""), tags.get("id", "")))
         elif cmd == "USERSTATE":
+            badges = tags.get("badges", "")
+            is_mod = tags.get("mod") == "1" or "broadcaster/" in badges
             self.userstate[channel] = (tags.get("display-name") or self.nick,
-                                       tags.get("color", ""), tags.get("badges", ""))
+                                       tags.get("color", ""), badges, is_mod)
         elif cmd == "GLOBALUSERSTATE":
             self.userstate["*"] = (tags.get("display-name") or self.nick,
-                                   tags.get("color", ""), tags.get("badges", ""))
+                                   tags.get("color", ""), tags.get("badges", ""), False)
         elif cmd == "USERNOTICE":
             sysmsg = tags.get("system-msg", "")
             if sysmsg:
@@ -1110,7 +1175,8 @@ class IrcThread(threading.Thread):
                 segs = self._apply_7tv(self._segments(trailing, tags.get("emotes", "")), channel)
                 self.put(("msg", channel, name, tags.get("color", ""), segs, False,
                           resolve_badges(self.badge_maps, channel, tags.get("badges", "")),
-                          (tags.get("login") or "").lower()))
+                          (tags.get("login") or "").lower(),
+                          tags.get("user-id", ""), tags.get("id", "")))
         elif cmd == "NOTICE":
             if trailing:
                 low = trailing.lower()
@@ -1459,6 +1525,9 @@ class OverlayApp:
         self.anim_enabled = tk.BooleanVar(value=bool(cfg.get("animations", True)))
         self.obs_chroma = tk.BooleanVar(value=bool(cfg.get("obs_chroma")))
         self.settings_win = None
+        self._msg_meta = {}   # тег -> (канал, логин, имя, user_id, message_id)
+        self._msg_seq = 0
+        self._action_win = None
 
         root.overrideredirect(True)
         root.attributes("-topmost", True)
@@ -1900,6 +1969,8 @@ class OverlayApp:
                 return
             self.cfg["token"] = info["token"]
             self.cfg["login"] = info["login"]
+            self.cfg["client_id"] = info.get("client_id", "")
+            self.cfg["user_id"] = info.get("user_id", "")
             if not self.cfg.get("highlight_name"):
                 self.cfg["highlight_name"] = info["login"]
             save_config(self.cfg)
@@ -2004,7 +2075,8 @@ class OverlayApp:
                 segs = irc._apply_7tv([("t", text)], channel)
                 badges = resolve_badges(irc.badge_maps, channel, btag)
                 irc.put(("msg", channel, name, color, segs, False, badges,
-                         (self.cfg.get("login") or "").lower()))
+                         (self.cfg.get("login") or "").lower(),
+                         self.cfg.get("user_id", ""), ""))
 
             DOWNLOAD_POOL.submit(build_echo)
         else:
@@ -2281,11 +2353,21 @@ class OverlayApp:
                              token=self.cfg.get("token", ""),
                              login=self.cfg.get("login", ""))
         stop_event = self.irc.stop_event
+        irc_ref = self.irc
 
         def load_assets():
+            # для модерации нужны client_id/user_id токена — добираем на старте
+            if self.cfg.get("token") and not (self.cfg.get("client_id")
+                                              and self.cfg.get("user_id")):
+                info = validate_token(self.cfg["token"])
+                if info:
+                    self.cfg["client_id"] = info["client_id"]
+                    self.cfg["user_id"] = info["user_id"]
+                    save_config(self.cfg)
             while True:
                 try:
                     bm, ids = fetch_badge_maps(channels)
+                    irc_ref.channel_ids.update(ids)
                     badge_maps.pop("_memo", None)
                     badge_maps.update(bm)
                     badge_maps["_ready"] = True
@@ -2581,6 +2663,120 @@ class OverlayApp:
             w._utags.add(tag)
         return tag
 
+    def msg_meta_tag(self, w, channel, login, name, uid, mid):
+        """Тег с данными сообщения: правый клик по нику -> карточка действий."""
+        if not login:
+            return None
+        self._msg_seq += 1
+        tag = "mm%d" % self._msg_seq
+        self._msg_meta[tag] = (channel, login, name, uid, mid)
+        if len(self._msg_meta) > 900:
+            for k in list(self._msg_meta)[:300]:
+                self._msg_meta.pop(k, None)
+        w.tag_bind(tag, "<Button-3>",
+                   lambda e, t=tag: self.user_action_popup(e, t))
+        return tag
+
+    def _is_mod(self, channel):
+        us = self.irc.userstate.get(channel) if self.irc else None
+        return bool(us and len(us) > 3 and us[3])
+
+    def user_action_popup(self, event, tag):
+        meta = self._msg_meta.get(tag)
+        if not meta:
+            return "break"
+        channel, login, name, uid, mid = meta
+        if self._action_win is not None:
+            try:
+                self._action_win.destroy()
+            except tk.TclError:
+                pass
+        win = tk.Toplevel(self.root)
+        self._action_win = win
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=BORDER)
+        box = tk.Frame(win, bg=BAR_BG, padx=6, pady=6)
+        box.pack(padx=1, pady=1)
+        tk.Label(box, text=name, bg=BAR_BG, fg=readable_color("", login),
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=4, pady=(0, 4))
+
+        def item(label_key, cmd, danger=False, confirm=False):
+            b = tk.Label(box, text=T(label_key), bg=BAR_BG,
+                         fg="#e06c6c" if danger else FG,
+                         font=("Segoe UI", 10), anchor="w", padx=8, pady=4,
+                         cursor="hand2")
+            b.pack(fill="x")
+            b.bind("<Enter>", lambda e: b.configure(bg=CHIPBTN_BG))
+            b.bind("<Leave>", lambda e: b.configure(bg=BAR_BG))
+            state = {"armed": False}
+
+            def click(e):
+                if confirm and not state["armed"]:
+                    state["armed"] = True
+                    b.configure(text=T("act_ban_confirm"))
+                    return
+                win.destroy()
+                cmd()
+            b.bind("<Button-1>", click)
+
+        item("act_profile", lambda: webbrowser.open("https://twitch.tv/" + login))
+        me = (self.cfg.get("login") or "").lower()
+        if self._is_mod(channel) and uid and login != me:
+            if mid:
+                item("act_delete",
+                     lambda: self._mod_action("delete", channel, uid, mid, name))
+            item("act_timeout",
+                 lambda: self._mod_action("timeout", channel, uid, mid, name))
+            item("act_ban",
+                 lambda: self._mod_action("ban", channel, uid, mid, name),
+                 danger=True, confirm=True)
+        win.bind("<FocusOut>", lambda e: win.destroy())
+        win.bind("<Escape>", lambda e: win.destroy())
+        win.update_idletasks()
+        x = min(event.x_root, win.winfo_screenwidth() - win.winfo_width() - 8)
+        win.geometry("+%d+%d" % (x, event.y_root + 6))
+        dwm_round(win, small=True)
+        win.focus_force()
+        return "break"
+
+    def _mod_action(self, kind, channel, uid, mid, name):
+        """Модерация через Helix — в пуле, результат приходит в чат sys-строкой."""
+        token = self.cfg.get("token", "")
+        cid = self.cfg.get("client_id", "")
+        my_id = self.cfg.get("user_id", "")
+        irc = self.irc
+
+        def run():
+            bid = irc.channel_ids.get(channel) if irc else None
+            if not (token and cid and my_id and bid):
+                irc.put(("sys", T("mod_err", "нет данных токена/канала")))
+                return
+            params = {"broadcaster_id": bid, "moderator_id": my_id}
+            if kind == "delete":
+                params["message_id"] = mid
+                code, resp = helix("DELETE", "moderation/chat", token, cid, params)
+                ok_msg = T("mod_deleted", name)
+            elif kind == "timeout":
+                code, resp = helix("POST", "moderation/bans", token, cid, params,
+                                   {"data": {"user_id": uid, "duration": 600}})
+                ok_msg = T("mod_timeout", name)
+            else:
+                code, resp = helix("POST", "moderation/bans", token, cid, params,
+                                   {"data": {"user_id": uid}})
+                ok_msg = T("mod_banned", name)
+            if code in (200, 204):
+                irc.put(("sys", ok_msg))
+            elif code == 401:
+                irc.put(("sys", T("mod_err_scope")))
+            elif code == 403:
+                irc.put(("sys", T("mod_err_notmod", channel)))
+            else:
+                detail = (resp or {}).get("message") or code
+                irc.put(("sys", T("mod_err", detail)))
+
+        DOWNLOAD_POOL.submit(run)
+
     _AT_RE = re.compile(r"(@[A-Za-z0-9_]{3,25})")
 
     def _insert_body_text(self, w, part, body_tag):
@@ -2601,6 +2797,8 @@ class OverlayApp:
             return
         _, channel, name, color, segs, action, badges = item[:7]
         login = item[7] if len(item) > 7 else ""
+        uid = item[8] if len(item) > 8 else ""
+        mid = item[9] if len(item) > 9 else ""
         line_no = int(w.index("end-1c").split(".")[0])
         multi = len(self.cfg.get("channels") or []) > 1
         if multi and channel and w is self.texts.get("*"):
@@ -2610,7 +2808,9 @@ class OverlayApp:
             if bimg is not None:
                 w.image_create("end", image=bimg, padx=2)
         utag = self.user_tag(w, login or name)
-        nick_tags = (self.color_tag(w, color, name), "nicklink") + ((utag,) if utag else ())
+        mtag = self.msg_meta_tag(w, channel, login or name.lower(), name, uid, mid)
+        nick_tags = ((self.color_tag(w, color, name), "nicklink")
+                     + ((utag,) if utag else ()) + ((mtag,) if mtag else ()))
         w.insert("end", name, nick_tags)
         body_tag = self.color_tag(w, color, name, body=True) if action else "msg"
         w.insert("end", " " if action else ": ", "msg")
