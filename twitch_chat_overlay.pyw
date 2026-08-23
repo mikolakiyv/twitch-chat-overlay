@@ -169,6 +169,18 @@ def draw_mod_icon(kind, size, hex_color):
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+def dwm_border(widget, hide):
+    """Прячет/возвращает системную 1px-обводку окна (Windows 11 рисует её
+    вокруг скруглённых окон поверх нашей прозрачности)."""
+    try:
+        hwnd = ctypes.windll.user32.GetAncestor(widget.winfo_id(), 2)
+        # DWMWA_BORDER_COLOR = 34; NONE = 0xFFFFFFFE, DEFAULT = 0xFFFFFFFF
+        color = ctypes.c_uint(0xFFFFFFFE if hide else 0xFFFFFFFF)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 34, ctypes.byref(color), 4)
+    except Exception:
+        pass
+
+
 def dwm_round(widget, small=False):
     """Скругляет углы окна средствами Windows 11 (на Windows 10 просто игнор)."""
     try:
@@ -588,7 +600,8 @@ class LruDict:
 
 EMOTE_CACHE = LruDict(500)        # id -> base64 PNG или None (не удалось скачать)
 BADGE_IMG_CACHE = LruDict(300)    # url -> base64 PNG или None
-SEVENTV_IMG_CACHE = LruDict(600)  # 7tv id -> base64 PNG или None
+SEVENTV_IMG_CACHE = LruDict(600)    # 7tv id -> payload или None
+SEVENTV_THUMB_CACHE = LruDict(800)  # 7tv id -> статичный PNG-превью (для пикера)
 DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=8)  # параллельная докачка картинок
 
 
@@ -1075,6 +1088,8 @@ def fetch_7tv_image(eid):
         url, kind = routes[i]
         if kind == "webp" and not HAS_PIL:
             continue
+        if i == 0 and SEVENTV_ROUTE.get("direct_fails", 0) >= 3:
+            continue  # прямой CDN у провайдера заблокирован — не тратим таймауты
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=6 if i == 0 else 9, context=SSL_CTX) as r:
@@ -1084,6 +1099,8 @@ def fetch_7tv_image(eid):
                 break  # такого смайла нет — зеркала не помогут
             continue
         except Exception:
+            if i == 0:
+                SEVENTV_ROUTE["direct_fails"] = SEVENTV_ROUTE.get("direct_fails", 0) + 1
             continue
         payload, save_path = None, None
         if raw.startswith(b"\x89PNG"):
@@ -1098,6 +1115,8 @@ def fetch_7tv_image(eid):
         if payload:
             data = payload
             SEVENTV_ROUTE["cdn"] = i
+            if i == 0:
+                SEVENTV_ROUTE["direct_fails"] = 0
             try:
                 os.makedirs(SEVENTV_CACHE_DIR, exist_ok=True)
                 write_cache_file(save_path, raw)
@@ -1105,6 +1124,47 @@ def fetch_7tv_image(eid):
                 pass
             break
     SEVENTV_IMG_CACHE.put(eid, data)
+    return data
+
+
+def fetch_7tv_thumb(eid):
+    """Статичное PNG-превью смайла 7TV для пикера: маленькое и быстрое,
+    через зеркала (у анимированных — первый кадр). base64 или None."""
+    eid = re.sub(r"[^A-Za-z0-9]", "", eid)
+    if not eid:
+        return None
+    cached = SEVENTV_THUMB_CACHE.get(eid, _MISS)
+    if cached is not _MISS:
+        return cached
+    data = None
+    path = os.path.join(SEVENTV_CACHE_DIR, eid + "_t.png")
+    try:
+        if os.path.isfile(path):
+            with open(path, "rb") as f:
+                data = base64.b64encode(f.read()).decode("ascii")
+        else:
+            # если полный вариант уже в памяти — превью из него, без сети
+            full = SEVENTV_IMG_CACHE.get(eid, _MISS)
+            if isinstance(full, dict) and full.get("master"):
+                data = full["master"]
+            else:
+                q = urllib.parse.quote("cdn.7tv.app/emote/%s/1x.webp" % eid, safe="")
+                for url in ("https://wsrv.nl/?url=%s&output=png&h=28" % q,
+                            "https://images.weserv.nl/?url=%s&output=png&h=28" % q):
+                    try:
+                        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(req, timeout=8, context=SSL_CTX) as r:
+                            raw = r.read()
+                        if raw.startswith(b"\x89PNG"):
+                            os.makedirs(SEVENTV_CACHE_DIR, exist_ok=True)
+                            write_cache_file(path, raw)
+                            data = base64.b64encode(raw).decode("ascii")
+                            break
+                    except Exception:
+                        continue
+    except OSError:
+        data = None
+    SEVENTV_THUMB_CACHE.put(eid, data)
     return data
 
 
@@ -2742,7 +2802,8 @@ class OverlayApp:
         return items[:128]
 
     def _ep_payload(self, kind, eid):
-        cache = SEVENTV_IMG_CACHE if kind == "7tv" else EMOTE_CACHE
+        # для 7TV в пикере используем лёгкие статичные превью — грузятся быстро
+        cache = SEVENTV_THUMB_CACHE if kind == "7tv" else EMOTE_CACHE
         return cache.get(eid, _MISS)
 
     def _ep_render(self):
@@ -2751,12 +2812,12 @@ class OverlayApp:
             c.destroy()
         self._ep_cells = []
         for i, (name, kind, eid) in enumerate(self._ep_items()):
-            key = ("e:7tv" + eid) if kind == "7tv" else ("e:" + eid)
+            key = ("ept:" + eid) if kind == "7tv" else ("e:" + eid)
             lbl = tk.Label(f, bg=BAR_BG, cursor="hand2", text=name[:6],
                            fg=SYS_FG, font=("Segoe UI", 7), width=6, height=2)
             payload = self._ep_payload(kind, eid)
             if payload is _MISS:
-                fn = fetch_7tv_image if kind == "7tv" else fetch_emote
+                fn = fetch_7tv_thumb if kind == "7tv" else fetch_emote
                 DOWNLOAD_POOL.submit(fn, eid)
             elif payload:
                 img = self.cached_image(key, payload)
@@ -2836,16 +2897,31 @@ class OverlayApp:
                 # красим и подложку окна: иначе её 1px виден как боковые рамки
                 self.root.configure(bg=key)
                 self._paint_chat_bg(key)
+                self._paint_input_bg(key)
+                dwm_border(self.root, True)   # системная обводка Win11 — долой
                 self.root.attributes("-alpha", 1.0)
                 self.root.attributes("-transparentcolor", key)
             else:
                 self.root.configure(bg=BORDER)
                 self._paint_chat_bg(BG)
+                self._paint_input_bg(BAR_BG)
+                dwm_border(self.root, False)
                 self.root.attributes("-transparentcolor", "")
                 self.root.attributes("-alpha", float(self.cfg.get("opacity", 0.88)))
         except tk.TclError:
             pass
         save_config(self.cfg)
+
+    def _paint_input_bg(self, color):
+        """Подложка строки ввода: в прозрачном режиме остаются только пилюли."""
+        try:
+            self.input_bar.configure(bg=color)
+            self.chan_btn.restyle(parent_bg=color)
+            self.entry_pill.restyle(parent_bg=color)
+            self.emote_btn.configure(bg=color)
+            self.announce_btn.configure(bg=color)
+        except tk.TclError:
+            pass
 
     def _paint_chat_bg(self, color):
         self.frame.configure(bg=color)
