@@ -214,6 +214,8 @@ DEFAULTS = {
     "key_frameless": {"vk": 120, "name": "F9"},
     "key_expand": {"vk": 121, "name": "F10"},
     "key_fullscreen": {"vk": 122, "name": "F11"},
+    "key_ghostinput": {"vk": 118, "name": "F7"},
+    "ghost_input": False,
     "exp_geometry": None,
     "recent_emotes": [],
     "max_messages": 150,
@@ -235,6 +237,9 @@ STRINGS = {
         "s_fullscreen": "Во весь экран",
         "d_key_fullscreen": "Во весь экран",
         "tt_min": "Свернуть",
+        "s_ghostinput": "Текст + поле ввода",
+        "d_key_ghostinput": "Текст + поле ввода",
+        "ghostinput_on": "Прозрачный чат с полем ввода. %s — вернуть окно.",
         "tt_emotes": "Смайлы (Twitch и 7TV)",
         "ep_search": "Поиск смайла…",
         "s_channels": "Каналы",
@@ -373,6 +378,9 @@ STRINGS = {
         "s_fullscreen": "Fullscreen",
         "d_key_fullscreen": "Fullscreen",
         "tt_min": "Minimize",
+        "s_ghostinput": "Text + input box",
+        "d_key_ghostinput": "Text + input box",
+        "ghostinput_on": "Transparent chat with the input box. %s — bring the window back.",
         "tt_emotes": "Emotes (Twitch & 7TV)",
         "ep_search": "Search emotes…",
         "s_channels": "Channels",
@@ -696,7 +704,8 @@ def load_config():
     for key, default in (("key_clickthrough", DEFAULTS["key_clickthrough"]),
                          ("key_frameless", DEFAULTS["key_frameless"]),
                          ("key_expand", DEFAULTS["key_expand"]),
-                         ("key_fullscreen", DEFAULTS["key_fullscreen"])):
+                         ("key_fullscreen", DEFAULTS["key_fullscreen"]),
+                         ("key_ghostinput", DEFAULTS["key_ghostinput"])):
         v = cfg.get(key)
         if not (isinstance(v, dict) and isinstance(v.get("vk"), int) and v.get("name")):
             cfg[key] = dict(default)
@@ -1694,6 +1703,7 @@ class OverlayApp:
         self.clickthrough = tk.BooleanVar(value=False)
         self.ghost = tk.BooleanVar(value=bool(cfg.get("ghost")))
         self.frameless = tk.BooleanVar(value=bool(cfg.get("frameless")))
+        self.ghost_input = tk.BooleanVar(value=bool(cfg.get("ghost_input")))
         self.topmost = tk.BooleanVar(value=True)
         self.theme_var = tk.StringVar(value=cfg.get("theme", "twitch"))
         self.lang_var = tk.StringVar(value=cfg.get("lang", "ru"))
@@ -1843,6 +1853,8 @@ class OverlayApp:
         self.update_mention_re()
         if self.frameless.get():
             self.apply_frameless(startup=True)
+        elif self.ghost_input.get():
+            self.apply_ghost_input(startup=True)
 
         self.connect(cfg["channels"])
         self.sys_message(T("hint_start", cfg["key_clickthrough"]["name"],
@@ -1969,6 +1981,12 @@ class OverlayApp:
                        command=self.apply_frameless, **chk).pack(side="left")
         chip_btn(r, self.cfg["key_frameless"]["name"],
                  lambda: self.rebind_key("key_frameless", T("d_key_textonly"),
+                                         self.refresh_settings)).pack(side="right")
+        r = row()
+        tk.Checkbutton(r, text=T("s_ghostinput"), variable=self.ghost_input,
+                       command=self.apply_ghost_input, **chk).pack(side="left")
+        chip_btn(r, self.cfg["key_ghostinput"]["name"],
+                 lambda: self.rebind_key("key_ghostinput", T("d_key_ghostinput"),
                                          self.refresh_settings)).pack(side="right")
         r = row()
         tk.Checkbutton(r, text=T("s_click"), variable=self.clickthrough,
@@ -2594,10 +2612,14 @@ class OverlayApp:
                 "geo": (self.root.winfo_x(), self.root.winfo_y(),
                         self.root.winfo_width(), self.root.winfo_height()),
                 "frameless": bool(self.frameless.get()),
+                "ghost_input": bool(self.ghost_input.get()),
             }
             if self.frameless.get():
                 self.frameless.set(False)
                 self.apply_frameless()
+            if self.ghost_input.get():
+                self.ghost_input.set(False)
+                self.apply_ghost_input()
             g = self.cfg.get("exp_geometry")
             if not (isinstance(g, list) and len(g) == 4):
                 x, y, w, h = self._pre_expand["geo"]
@@ -2623,6 +2645,9 @@ class OverlayApp:
             if pe.get("frameless"):
                 self.frameless.set(True)
                 self.apply_frameless()
+            elif pe.get("ghost_input"):
+                self.ghost_input.set(True)
+                self.apply_ghost_input()
 
     # ---------- пикер смайлов (Twitch + 7TV) ----------
 
@@ -2882,34 +2907,55 @@ class OverlayApp:
         else:
             self.hint_lbl.configure(text="")
 
+    def _is_bare(self):
+        return bool(self.frameless.get() or self.ghost_input.get())
+
     def apply_frameless(self, startup=False):
-        """Безрамочный режим: убирает рамку, полосу И фон — остаётся только текст чата."""
-        on = bool(self.frameless.get())
-        self.cfg["frameless"] = on
+        """F9 — только текст чата: без рамки, полосы, поля ввода и фона."""
+        if self.frameless.get() and self.ghost_input.get():
+            self.ghost_input.set(False)
+        self._apply_bare(startup, key_name=self.cfg["key_frameless"]["name"],
+                         msg_key="textonly_on")
+
+    def apply_ghost_input(self, startup=False):
+        """F7 — прозрачный чат, но поле ввода (и смайлы) остаются."""
+        if self.ghost_input.get() and self.frameless.get():
+            self.frameless.set(False)
+        self._apply_bare(startup, key_name=self.cfg["key_ghostinput"]["name"],
+                         msg_key="ghostinput_on")
+
+    def _apply_bare(self, startup=False, key_name="", msg_key=""):
+        bare = self._is_bare()
+        was_bare = getattr(self, "_bare_now", False)
+        self._bare_now = bare
+        self.cfg["frameless"] = bool(self.frameless.get())
+        self.cfg["ghost_input"] = bool(self.ghost_input.get())
         save_config(self.cfg)
-        if on:
-            if not startup:
+        if bare:
+            if not was_bare and not startup:
                 self._ghost_before = bool(self.ghost.get())
             self.bar.pack_forget()
             self.tab_bar.pack_forget()
-            self.input_bar.pack_forget()
             self.grip.place_forget()
             self.jump_to_bottom()
             self.frame.pack_configure(padx=0, pady=0)
+            if self.ghost_input.get():
+                self.update_input_bar()   # поле ввода остаётся — можно писать
+            else:
+                self.input_bar.pack_forget()
             if not self.ghost.get():
                 self.ghost.set(True)
             self.apply_look()
-            if not startup:
-                self.sys_message(T("textonly_on", self.cfg["key_frameless"]["name"]))
+            if not startup and msg_key:
+                self.sys_message(T(msg_key, key_name))
         else:
             self.frame.pack_configure(padx=1, pady=1)
             self.bar.pack(fill="x", before=self.feed_area)
-            if self.layout == "tabs" and len(self.cfg.get("channels") or []) > 1:
-                self.tab_bar.pack(fill="x", after=self.bar)
             self.update_input_bar()
             self.grip.place(relx=1.0, rely=1.0, anchor="se")
             self.ghost.set(bool(getattr(self, "_ghost_before", False)))
             self.apply_look()
+        self._apply_layout()  # заголовки колонок/вкладки прячутся в голом режиме
 
     def _key_pressed(self, vk):
         """Глобальное нажатие клавиши (по фронту), даже когда окно без фокуса."""
@@ -2933,6 +2979,9 @@ class OverlayApp:
                 self.set_expanded(not self.expanded)
             if self._key_pressed(self.cfg["key_fullscreen"]["vk"]):
                 self.set_fullscreen(not self.fullscreen)
+            if self._key_pressed(self.cfg["key_ghostinput"]["vk"]):
+                self.ghost_input.set(not self.ghost_input.get())
+                self.apply_ghost_input()
         self.root.after(120, self.poll_keys)
 
     def rebind_key(self, which, title, on_done=None):
@@ -2954,8 +3003,8 @@ class OverlayApp:
             if e.keycode in (16, 17, 18):  # Shift/Ctrl/Alt сами по себе не подходят
                 lbl.configure(text=T("d_key_mod"))
                 return
-            others = [k for k in ("key_frameless", "key_clickthrough",
-                                  "key_expand", "key_fullscreen") if k != which]
+            others = [k for k in ("key_frameless", "key_clickthrough", "key_expand",
+                                  "key_fullscreen", "key_ghostinput") if k != which]
             if any(e.keycode == self.cfg[o]["vk"] for o in others):
                 lbl.configure(text=T("d_key_taken"))
                 return
@@ -3338,7 +3387,7 @@ class OverlayApp:
         if visible:
             if at_bottom:
                 w.see("end")
-            elif w is self.text and self.layout != "columns" and not self.frameless.get():
+            elif w is self.text and self.layout != "columns" and not self._is_bare():
                 # пользователь листает историю — счётчик новых снизу (одна лента)
                 fresh = sum(1 for it, _ in flagged if it[0] == "msg")
                 if fresh:
@@ -3379,7 +3428,7 @@ class OverlayApp:
             b.bind("<Button-1>", lambda e, k=key: self.switch_tab(k))
             self._tab_btns[key] = b
         self._style_tabs()
-        if not self.frameless.get():
+        if not self._is_bare():
             self.tab_bar.pack(fill="x", after=self.bar)
 
     def _style_tabs(self):
@@ -3477,12 +3526,18 @@ class OverlayApp:
         fa.grid_rowconfigure(1, weight=1)
         chans = self.cfg.get("channels") or []
 
+        bare = getattr(self, "_bare_now", False) or self._is_bare()
         if self.layout == "columns" and chans:
             cols = chans[:4]
             for i, ch in enumerate(cols):
-                self._col_header(ch).grid(row=0, column=i, sticky="ew", padx=(0, 1))
-                self.texts[ch].grid(row=1, column=i, sticky="nsew", padx=(0, 1))
+                if not bare:  # в «голом» режиме — только сами ленты, без шапок
+                    self._col_header(ch).grid(row=0, column=i, sticky="ew", padx=(0, 1))
+                self.texts[ch].grid(row=0 if bare else 1, column=i,
+                                    rowspan=2 if bare else 1,
+                                    sticky="nsew", padx=(0, 1))
                 fa.grid_columnconfigure(i, weight=1, uniform="cols")
+            if bare:
+                fa.grid_rowconfigure(0, weight=1)
             focus = cols[self.send_index] if self.send_index < len(cols) else cols[0]
             self.text = self.texts[focus]
             self.tab_bar.pack_forget()
