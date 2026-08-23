@@ -41,6 +41,7 @@ from tkinter import font as tkfont
 try:
     import io as _io
     from PIL import Image as _PILImage
+    from PIL import ImageDraw as _PILDraw
     HAS_PIL = True
 except Exception:
     HAS_PIL = False
@@ -94,6 +95,69 @@ def apply_palette(name):
     BTN_FG = p["btnfg"]
     SLIDER_TRACK = p["slider_track"]
     SLIDER_KNOB = p["slider_knob"]
+
+
+def _hex_to_rgb(h):
+    h = h.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def draw_mod_icon(kind, size, hex_color):
+    """Рисует иконку модерации (ban/timeout/warn/delete) в едином стиле.
+
+    Возвращает base64 PNG с прозрачным фоном или None (без Pillow). Рисуется
+    в 4x с последующим уменьшением — получается гладкая антиалиасная линия.
+    """
+    if not HAS_PIL:
+        return None
+    ss = 4
+    S = size * ss
+    col = _hex_to_rgb(hex_color) + (255,)
+    img = _PILImage.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = _PILDraw.Draw(img)
+    lw = max(2, round(S / 11))
+    m = round(S * 0.14)
+    c = S / 2
+    if kind == "ban":
+        d.ellipse([m, m, S - m, S - m], outline=col, width=lw)
+        r = (S - 2 * m) / 2
+        off = r * 0.707
+        d.line([c - off, c - off, c + off, c + off], fill=col, width=lw)
+    elif kind == "timeout":
+        d.ellipse([m, m, S - m, S - m], outline=col, width=lw)
+        rr = (S - 2 * m) / 2
+        d.line([c, c, c, c - rr * 0.58], fill=col, width=lw)   # часовая на 12
+        d.line([c, c, c + rr * 0.5, c], fill=col, width=lw)    # минутная на 3
+    elif kind == "warn":
+        top, bot = m * 0.7, S - m
+        d.line([c, top, S - m, bot], fill=col, width=lw, joint="curve")
+        d.line([S - m, bot, m, bot], fill=col, width=lw, joint="curve")
+        d.line([m, bot, c, top], fill=col, width=lw, joint="curve")
+        d.line([c, S * 0.42, c, S * 0.66], fill=col, width=lw)      # палочка «!»
+        d.ellipse([c - lw * 0.6, S * 0.74, c + lw * 0.6, S * 0.74 + lw * 1.2], fill=col)
+    elif kind == "delete":
+        top = S * 0.30
+        d.line([m * 0.9, top, S - m * 0.9, top], fill=col, width=lw)        # крышка
+        d.line([c - S * 0.11, top - S * 0.10, c + S * 0.11, top - S * 0.10],
+               fill=col, width=lw)                                          # ручка
+        body = [S * 0.26, top, S * 0.74, top, S * 0.68, S - m, S * 0.32, S - m]
+        d.line(body[0:4] + [S * 0.32, S - m], fill=col, width=lw, joint="curve")
+        d.line([S * 0.30, top, S * 0.34, S - m], fill=col, width=lw)        # левая стенка
+        d.line([S * 0.70, top, S * 0.66, S - m], fill=col, width=lw)        # правая стенка
+        d.line([S * 0.34, S - m, S * 0.66, S - m], fill=col, width=lw)      # дно
+        for fx in (0.43, 0.5, 0.57):                                         # рёбра
+            d.line([S * fx, top + S * 0.10, S * fx, S - m - S * 0.06],
+                   fill=col, width=max(2, lw - 1))
+    elif kind == "announce":
+        d.polygon([(S * 0.20, S * 0.40), (S * 0.20, S * 0.60),
+                   (S * 0.42, S * 0.60), (S * 0.62, S * 0.76),
+                   (S * 0.62, S * 0.24), (S * 0.42, S * 0.40)],
+                  outline=col, width=lw)
+        d.arc([S * 0.66, S * 0.36, S * 0.86, S * 0.64], -55, 55, fill=col, width=lw)
+    img = img.resize((size, size), _PILImage.LANCZOS)
+    buf = _io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def dwm_round(widget, small=False):
@@ -164,7 +228,9 @@ STRINGS = {
         "act_ban": "Забанить",
         "act_ban_confirm": "Точно забанить?",
         "s_modicons": "Кнопки модерации в чате",
-        "ban_arm": "Ещё раз по ⊘ в течение 3 сек — бан %s",
+        "ban_arm": "Ещё раз по значку бана в течение 3 сек — бан %s",
+        "ann_sent": "📢 Анонс отправлен",
+        "tt_announce": "Отправить как анонс",
         "mod_warned": "⚠ %s получил предупреждение",
         "warn_reason": "Предупреждение от модератора",
         "mod_deleted": "✂ Сообщение %s удалено",
@@ -279,7 +345,9 @@ STRINGS = {
         "act_ban": "Ban",
         "act_ban_confirm": "Really ban?",
         "s_modicons": "Mod buttons in chat",
-        "ban_arm": "Click ⊘ again within 3 s to ban %s",
+        "ban_arm": "Click the ban icon again within 3 s to ban %s",
+        "ann_sent": "📢 Announcement sent",
+        "tt_announce": "Send as announcement",
         "mod_warned": "⚠ %s was warned",
         "warn_reason": "Moderator warning",
         "mod_deleted": "✂ Message by %s deleted",
@@ -1598,6 +1666,10 @@ class OverlayApp:
                                      fill=ENTRY_BG, fg=FG, parent_bg=BAR_BG)
         self.entry = self.entry_pill.entry
         self.entry.bind("<Return>", self.send_current)
+        # кнопка-мегафон: отправить текст поля цветным анонсом (для модеров)
+        self.announce_btn = tk.Label(self.input_bar, bg=BAR_BG, cursor="hand2")
+        self.announce_btn.bind("<Button-1>", lambda e: self.send_announce())
+        self._announce_shown = False
         self.chan_btn.pack(side="left", padx=(6, 0), pady=5)
         self.entry_pill.pack(side="left", fill="x", expand=True, padx=(6, 16), pady=5)
         # плейсхолдер: подсказывает, что тут пишут в чат
@@ -1625,7 +1697,8 @@ class OverlayApp:
                                       font=("Segoe UI", 9), padx=12)
 
         for w, key in ((self.heart_btn, "tt_donate"), (self.gear_btn, "tt_menu"),
-                       (self.close_btn, "tt_close"), (self.chan_btn, "tt_chan")):
+                       (self.close_btn, "tt_close"), (self.chan_btn, "tt_chan"),
+                       (self.announce_btn, "tt_announce")):
             Tooltip(w, key)
 
         # --- события ---
@@ -1639,6 +1712,7 @@ class OverlayApp:
         for w in (root, self.bar, self.title_lbl):
             w.bind("<Button-3>", self.open_settings)
 
+        self._build_icon_photos()
         self.place_window()
         root.deiconify()
         root.update_idletasks()
@@ -1870,6 +1944,8 @@ class OverlayApp:
         self.font_nick.configure(size=size)
         self.font_sys.configure(size=max(8, size - 2))
         self.font_chip.configure(size=max(7, size - 3))
+        self._build_icon_photos()  # иконки перерисовываем под новый кегль
+        self._sync_announce_icon()
         try:
             self._fs_lbl.configure(text=str(size))
         except tk.TclError:
@@ -1937,6 +2013,10 @@ class OverlayApp:
         self.entry.configure(selectbackground=SELECT_BG,
                              fg=SYS_FG if getattr(self, "_ph_on", False) else FG)
         self.newmsg_btn.restyle(fill=CHIPBTN_BG, fg=FG, parent_bg=BG)
+        self.announce_btn.configure(bg=BAR_BG)
+        self._build_icon_photos()  # иконки согласуем с новым акцентом темы
+        self._announce_shown = None
+        self._sync_announce_icon()
         for w in self.texts.values():
             w.configure(bg=BG, fg=FG, selectbackground=SELECT_BG)
             w.tag_configure("sys", foreground=SYS_FG)
@@ -2098,6 +2178,59 @@ class OverlayApp:
             DOWNLOAD_POOL.submit(build_echo)
         else:
             self.sys_message(T("not_sent"))
+
+    def _send_channel(self):
+        chans = self.cfg.get("channels") or []
+        if not chans:
+            return ""
+        return chans[min(self.send_index, len(chans) - 1)]
+
+    def _sync_announce_icon(self):
+        """Показывает мегафон у поля ввода, если ты модер/стример на канале отправки."""
+        show = (bool(self.cfg.get("login")) and not getattr(self, "_ph_off_hidden", False)
+                and self._is_mod(self._send_channel())
+                and getattr(self, "_icon_norm", {}).get("announce") is not None)
+        if show == self._announce_shown:
+            return
+        self._announce_shown = show
+        if show:
+            self.announce_btn.configure(image=self._icon_norm["announce"])
+            self.announce_btn.pack(side="left", padx=(0, 6), pady=5,
+                                   before=self.entry_pill)
+        else:
+            self.announce_btn.pack_forget()
+
+    def send_announce(self):
+        if getattr(self, "_ph_on", False):
+            return
+        text = self.entry.get().strip()[:500]
+        channel = self._send_channel()
+        if not text or not channel:
+            return
+        token = self.cfg.get("token", "")
+        cid = self.cfg.get("client_id", "")
+        my_id = self.cfg.get("user_id", "")
+        irc = self.irc
+
+        def run():
+            bid = irc.channel_ids.get(channel) if irc else None
+            if not (token and cid and my_id and bid):
+                irc.put(("sys", T("mod_err", "нет данных токена/канала")))
+                return
+            code, resp = helix("POST", "chat/announcements", token, cid,
+                               {"broadcaster_id": bid, "moderator_id": my_id},
+                               {"message": text, "color": "primary"})
+            if code in (200, 204):
+                irc.put(("sys", T("ann_sent")))
+            elif code == 401:
+                irc.put(("sys", T("mod_err_scope")))
+            elif code == 403:
+                irc.put(("sys", T("mod_err_notmod", channel)))
+            else:
+                irc.put(("sys", T("mod_err", (resp or {}).get("message") or code)))
+
+        DOWNLOAD_POOL.submit(run)
+        self.entry.delete(0, "end")
 
     # ---------- внешний вид ----------
 
@@ -2444,6 +2577,7 @@ class OverlayApp:
                     self.jump_to_bottom()
             except tk.TclError:
                 pass
+        self._sync_announce_icon()  # статус модерки приходит из USERSTATE асинхронно
         self.root.after(60, self.poll_queue)
 
     def color_tag(self, w, color, login, body=False):
@@ -2684,6 +2818,74 @@ class OverlayApp:
             w._utags.add(tag)
         return tag
 
+    def _build_icon_photos(self):
+        """(Пере)генерирует PhotoImage мод-иконок: обычная (серая) и hover (яркая)."""
+        self._icon_norm = {}   # kind -> PhotoImage (обычный цвет)
+        self._icon_hot = {}    # kind -> PhotoImage (при наведении)
+        self._icon_to_hot = {} # имя photo -> hover-photo (для смены на лету)
+        self._icon_to_norm = {}
+        if not HAS_PIL:
+            return
+        size = max(14, int(self.cfg.get("font_size", 11) * 1.5))
+        for kind, hot_color in (("ban", "#ff6b6b"), ("timeout", FG),
+                                ("warn", "#ffcf5c"), ("delete", FG),
+                                ("announce", ACCENT)):
+            n64 = draw_mod_icon(kind, size, SYS_FG)
+            h64 = draw_mod_icon(kind, size, hot_color)
+            if not n64 or not h64:
+                continue
+            try:
+                pn = tk.PhotoImage(data=n64)
+                ph = tk.PhotoImage(data=h64)
+            except tk.TclError:
+                continue
+            self._icon_norm[kind] = pn
+            self._icon_hot[kind] = ph
+            self._icon_to_hot[str(pn)] = ph
+            self._icon_to_norm[str(ph)] = pn
+
+    def _insert_mod_icon(self, w, kind, mtag):
+        img = getattr(self, "_icon_norm", {}).get(kind)
+        if img is None:  # без Pillow — запасной текстовый глиф
+            glyph = {"ban": "⊘", "timeout": "◷", "warn": "⚠", "delete": "🗑"}[kind]
+            itag = "%s.%s" % (mtag, kind[0])
+            w.tag_configure(itag, foreground=SYS_FG, font=self.font_chip)
+            w.tag_bind(itag, "<Button-1>",
+                       lambda e, k=kind, t=mtag: self._icon_action(k, t) or "break")
+            w.insert("end", glyph + " ", (itag, "nicklink"))
+            return
+        itag = "%s.%s" % (mtag, kind[0])
+        w.image_create("end", image=img, padx=2)
+        w.tag_add(itag, "end-2c", "end-1c")  # помечаем только что вставленную картинку
+        w.tag_bind(itag, "<Button-1>",
+                   lambda e, k=kind, t=mtag: self._icon_action(k, t) or "break")
+        w.tag_bind(itag, "<Enter>", self._icon_enter)
+        w.tag_bind(itag, "<Leave>", self._icon_leave)
+
+    def _icon_enter(self, e):
+        w = e.widget
+        try:
+            idx = w.index("@%d,%d" % (e.x, e.y))
+            cur = w.image_cget(idx, "image")
+            hot = self._icon_to_hot.get(cur)
+            if hot is not None:
+                w.image_configure(idx, image=hot)
+            w.configure(cursor="hand2")
+        except tk.TclError:
+            pass
+
+    def _icon_leave(self, e):
+        w = e.widget
+        try:
+            idx = w.index("@%d,%d" % (e.x, e.y))
+            cur = w.image_cget(idx, "image")
+            norm = self._icon_to_norm.get(cur)
+            if norm is not None:
+                w.image_configure(idx, image=norm)
+            w.configure(cursor="arrow")
+        except tk.TclError:
+            pass
+
     def msg_meta_tag(self, w, channel, login, name, uid, mid):
         """Тег с данными сообщения: правый клик по нику -> карточка действий."""
         if not login:
@@ -2854,20 +3056,10 @@ class OverlayApp:
         # мод-иконки перед сообщением, как в мод-виде Twitch: бан/таймаут/варн/удалить
         if (mtag and uid and self.mod_icons.get() and self._is_mod(channel)
                 and (login or name.lower()) != (self.cfg.get("login") or "").lower()):
-            for glyph, kind in (("⊘", "ban"), ("◷", "timeout"),
-                                ("⚠", "warn"), ("🗑", "delete")):
+            for kind in ("ban", "timeout", "warn", "delete"):
                 if kind == "delete" and not mid:
                     continue
-                itag = "%s.%s" % (mtag, kind[0])
-                w.tag_configure(itag, foreground=SYS_FG, font=self.font_chip)
-                w.tag_bind(itag, "<Button-1>",
-                           lambda e, k=kind, t=mtag: self._icon_action(k, t) or "break")
-                w.tag_bind(itag, "<Enter>",
-                           lambda e, ww=w, it=itag: ww.tag_configure(it, foreground=FG))
-                w.tag_bind(itag, "<Leave>",
-                           lambda e, ww=w, it=itag: ww.tag_configure(it, foreground=SYS_FG))
-                w.insert("end", glyph, (itag, "nicklink"))
-                w.insert("end", " ")
+                self._insert_mod_icon(w, kind, mtag)
         nick_tags = ((self.color_tag(w, color, name), "nicklink")
                      + ((utag,) if utag else ()) + ((mtag,) if mtag else ()))
         w.insert("end", name, nick_tags)
