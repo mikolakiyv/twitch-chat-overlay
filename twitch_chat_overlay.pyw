@@ -284,6 +284,8 @@ STRINGS = {
         "s_about": "О программе",
         "mention_saved": "Упоминания: @%s",
         "tab_all": "Все",
+        "tab_add_ph": "＋ ссылка или канал",
+        "add_bad": "Не понял: нужна ссылка twitch.tv/канал или имя канала",
         "s_anim": "Анимация смайлов",
         "s_chroma": "Хромакей для OBS",
         "act_profile": "Открыть профиль",
@@ -435,6 +437,8 @@ STRINGS = {
         "s_about": "About",
         "mention_saved": "Mentions: @%s",
         "tab_all": "All",
+        "tab_add_ph": "＋ link or channel",
+        "add_bad": "Couldn't parse that: paste a twitch.tv/channel link or a channel name",
         "s_anim": "Animated emotes",
         "s_chroma": "OBS chroma key",
         "act_profile": "Open profile",
@@ -775,12 +779,32 @@ def save_config(cfg):
         pass
 
 
+# пути twitch.tv, за которыми идёт имя канала (popout/qissme_/chat, moderator/qissme_)
+_TW_SKIP = {"popout", "embed", "moderator", "u"}
+# пути, в которых имени канала нет вовсе (videos/123, clip/…, directory/…)
+_TW_STOP = {"videos", "clip", "clips", "directory", "search", "settings", "subscriptions",
+            "downloads", "drops", "inventory", "wallet", "prime", "turbo", "jobs", "p",
+            "store", "event", "events", "collections", "friends", "messages", "login"}
+
+
 def extract_channel(raw):
-    """Достаёт имя канала из строки: имя, @имя или ссылка twitch.tv/имя."""
+    """Достаёт имя канала из строки: имя, @имя или любая ссылка Twitch
+    (twitch.tv/имя, попаут-чат, мод-вью, m.twitch.tv, player.twitch.tv/?channel=…)."""
     raw = (raw or "").strip()
-    m = re.search(r"twitch\.tv/([A-Za-z0-9_]{1,25})", raw)
+    m = re.search(r"[?&]channel=([A-Za-z0-9_]{1,25})", raw)
     if m:
         return m.group(1).lower()
+    if re.search(r"clips\.twitch\.tv/", raw, re.IGNORECASE):
+        return None
+    m = re.search(r"twitch\.tv/([^?#\s]*)", raw, re.IGNORECASE)
+    if m:
+        for seg in m.group(1).split("/"):
+            if not seg or seg.lower() in _TW_SKIP:
+                continue
+            if seg.lower() in _TW_STOP:
+                return None
+            return seg.lower() if re.fullmatch(r"[A-Za-z0-9_]{1,25}", seg) else None
+        return None
     raw = raw.lstrip("#@ ").strip()
     if re.fullmatch(r"[A-Za-z0-9_]{1,25}", raw):
         return raw.lower()
@@ -3810,18 +3834,66 @@ class OverlayApp:
             c.destroy()
         self._tab_btns = {}
         chans = self.cfg.get("channels") or []
-        if self.layout != "tabs" or len(chans) < 2:
+        if self.layout != "tabs" or not chans:
             self.tab_bar.pack_forget()
             return
-        for key, text in [("*", T("tab_all"))] + [(c, "#" + c) for c in chans]:
-            b = tk.Label(self.tab_bar, text=text, bg=BAR_BG, fg=SYS_FG,
-                         font=("Segoe UI", 9), padx=8, pady=3, cursor="hand2")
-            b.pack(side="left")
-            b.bind("<Button-1>", lambda e, k=key: self.switch_tab(k))
-            self._tab_btns[key] = b
+        if len(chans) > 1:
+            for key, text in [("*", T("tab_all"))] + [(c, "#" + c) for c in chans]:
+                b = tk.Label(self.tab_bar, text=text, bg=BAR_BG, fg=SYS_FG,
+                             font=("Segoe UI", 9), padx=8, pady=3, cursor="hand2")
+                b.pack(side="left")
+                b.bind("<Button-1>", lambda e, k=key: self.switch_tab(k))
+                self._tab_btns[key] = b
+        # справа — поле «＋ ссылка или канал»: вставил ссылку, Enter — чат открылся
+        self.tab_add = RoundEntry(self.tab_bar, font=("Segoe UI", 9), height=22,
+                                  parent_bg=BAR_BG)
+        self.tab_add.configure(width=168)
+        self.tab_add.pack(side="right", padx=(6, 8), pady=2)
+        self._placeholder(self.tab_add.entry, T("tab_add_ph"))
+        self.tab_add.entry.bind("<Return>", self._add_channel_from_tab)
+        self.tab_add.entry.bind("<Escape>", lambda e: (self.tab_add.entry.delete(0, "end"),
+                                                        self.root.focus_set()))
+        Tooltip(self.tab_add, "tab_add_ph")
         self._style_tabs()
         if not self._is_bare():
             self.tab_bar.pack(fill="x", after=self.bar)
+
+    def _placeholder(self, ent, text):
+        """Серая подсказка в пустом Entry; исчезает при фокусе, возвращается пустому."""
+        def show(e=None):
+            if not ent.get():
+                ent.insert(0, text)
+                ent.configure(fg=SYS_FG)
+                ent._ph = True
+
+        def hide(e=None):
+            if getattr(ent, "_ph", False):
+                ent.delete(0, "end")
+                ent.configure(fg=FG)
+                ent._ph = False
+        ent._ph = False
+        ent.bind("<FocusIn>", hide)
+        ent.bind("<FocusOut>", show)
+        show()
+
+    def _add_channel_from_tab(self, event=None):
+        """Enter в поле полосы вкладок: разобрать ссылку/имя и открыть этот чат."""
+        ent = self.tab_add.entry
+        raw = "" if getattr(ent, "_ph", False) else ent.get()
+        chans = parse_channels(raw)
+        if not chans:
+            self.sys_message(T("add_bad"))
+            return
+        ent.delete(0, "end")
+        self.root.focus_set()
+        cur = list(self.cfg.get("channels") or [])
+        new = [c for c in chans if c not in cur]
+        if new:
+            self.cfg["active_tab"] = new[0]
+            self.send_index = len(cur)
+            self.connect(cur + new)
+        else:
+            self.switch_tab(chans[0])
 
     def _style_tabs(self):
         for key, b in self._tab_btns.items():
