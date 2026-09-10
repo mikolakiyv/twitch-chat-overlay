@@ -64,13 +64,15 @@ PALETTES = {
                    accent_hover="#e89b7f", accent_active="#b85c3e",
                    mention="#503527", entry="#30302b", chipbtn="#34332e",
                    select="#4a4740", grip="#6b665d", btnfg="#cac5bb",
-                   slider_track="#cfc8ba", slider_knob="#f6f2e9", reward="#33322c"),
+                   slider_track="#cfc8ba", slider_knob="#f6f2e9", reward="#33322c",
+                   first_bg="#3a2a31", first_fg="#e88aa8"),
     "twitch": dict(bg="#17171a", bar="#1e1e22", border="#3a3a41", fg="#efeff1",
                    sys="#a3a3ab", chip="#a6a6ae", accent="#9147ff",
                    accent_hover="#c39cff", accent_active="#772ce8",
                    mention="#3d2a66", entry="#26262b", chipbtn="#2e2e35",
                    select="#404049", grip="#63636b", btnfg="#cfcfd6",
-                   slider_track="#c9cbd6", slider_knob="#f4f4f8", reward="#2a2a3d"),
+                   slider_track="#c9cbd6", slider_knob="#f4f4f8", reward="#2a2a3d",
+                   first_bg="#2e1e2b", first_fg="#ff6fb4"),
 }
 
 
@@ -78,9 +80,11 @@ def apply_palette(name):
     """Назначает глобальные цвета из выбранной темы (BG — ключ прозрачности)."""
     global BG, BAR_BG, BORDER, FG, SYS_FG, CHIP_FG, ACCENT, ACCENT_HOVER
     global ACCENT_ACTIVE, MENTION_BG, ENTRY_BG, CHIPBTN_BG, SELECT_BG, GRIP_FG, BTN_FG
-    global SLIDER_TRACK, SLIDER_KNOB, REWARD_BG
+    global SLIDER_TRACK, SLIDER_KNOB, REWARD_BG, FIRST_BG, FIRST_FG
     p = PALETTES.get(name) or PALETTES["claude"]
     REWARD_BG = p["reward"]
+    FIRST_BG = p["first_bg"]
+    FIRST_FG = p["first_fg"]
     BG = p["bg"]
     BAR_BG = p["bar"]
     BORDER = p["border"]
@@ -295,7 +299,8 @@ STRINGS = {
         "act_ban": "Забанить",
         "act_ban_confirm": "Точно забанить?",
         "s_modicons": "Кнопки модерации в чате",
-        "s_extras": "Ответы и награды за баллы в чате",
+        "s_extras": "Ответы, награды, первые сообщения",
+        "first_msg": "ПЕРВОЕ СООБЩЕНИЕ",
         "hdr_reply": "Ответ ",
         "rw_line": "%s забирает награду «%s»",
         "rw_generic": "%s забирает награду за баллы",
@@ -448,7 +453,8 @@ STRINGS = {
         "act_ban": "Ban",
         "act_ban_confirm": "Really ban?",
         "s_modicons": "Mod buttons in chat",
-        "s_extras": "Replies & channel point rewards in chat",
+        "s_extras": "Replies, rewards, first messages",
+        "first_msg": "FIRST MESSAGE",
         "hdr_reply": "Replying to ",
         "rw_line": "%s redeemed %s",
         "rw_generic": "%s redeemed a channel points reward",
@@ -1628,6 +1634,8 @@ class IrcThread(threading.Thread):
             if rp_login:
                 extra["reply"] = (tags.get("reply-parent-display-name") or rp_login, rp_login,
                                   tags.get("reply-parent-msg-body", ""))
+            if tags.get("first-msg") == "1":
+                extra["first"] = True
             rw = lookup_reward(self.reward_maps, channel, tags.get("custom-reward-id", ""),
                                tags.get("msg-id", ""))
             if rw and rw["unknown"] and self.on_unknown_reward:
@@ -2067,6 +2075,7 @@ class OverlayApp:
         self.font_sys = tkfont.Font(family=base_family, size=max(8, size - 2), slant="italic")
         self.font_chip = tkfont.Font(family=base_family, size=max(7, size - 3))
         self.font_small = tkfont.Font(family=base_family, size=max(8, size - 2))
+        self.font_tag = tkfont.Font(family=base_family, size=max(7, size - 4), weight="bold")
 
         # --- верхняя полоса ---
         self.bar = tk.Frame(frame, bg=BAR_BG)
@@ -2531,6 +2540,7 @@ class OverlayApp:
         self.font_sys.configure(size=max(8, size - 2))
         self.font_chip.configure(size=max(7, size - 3))
         self.font_small.configure(size=max(8, size - 2))
+        self.font_tag.configure(size=max(7, size - 4))
         self._build_icon_photos()  # иконки перерисовываем под новый кегль
         self._sync_announce_icon()
         try:
@@ -2612,6 +2622,8 @@ class OverlayApp:
             w.tag_configure("msg", foreground=FG)
             w.tag_configure("chip", foreground=CHIP_FG)
             w.tag_configure("hdr", foreground=SYS_FG)
+            w.tag_configure("first", background=FIRST_BG, lmargincolor=FIRST_FG)
+            w.tag_configure("firstlbl", foreground=FIRST_FG)
             w.tag_configure("reward", background=REWARD_BG)
             w.tag_configure("mention", background=MENTION_BG)
         self.tab_bar.configure(bg=BAR_BG)
@@ -3819,6 +3831,10 @@ class OverlayApp:
         w.tag_configure("msg", foreground=FG, font=self.font_msg)
         w.tag_configure("chip", foreground=CHIP_FG, font=self.font_chip)
         w.tag_configure("hdr", foreground=SYS_FG, font=self.font_small)
+        # первое сообщение в чате — как в 7TV: розовая кромка слева, подложка и метка справа
+        w.tag_configure("first", background=FIRST_BG, lmargin1=4, lmargin2=4,
+                        lmargincolor=FIRST_FG)
+        w.tag_configure("firstlbl", foreground=FIRST_FG, font=self.font_tag, justify="right")
         w.tag_configure("reward", background=REWARD_BG)   # ниже «mention»: упоминание важнее
         w.tag_configure("mention", background=MENTION_BG)
         w.tag_configure("atbold", font=self.font_nick)
@@ -4293,14 +4309,23 @@ class OverlayApp:
         uid = item[8] if len(item) > 8 else ""
         mid = item[9] if len(item) > 9 else ""
         extra = item[11] if len(item) > 11 and isinstance(item[11], dict) else {}
-        rw = extra.get("reward") if self.chat_extras.get() else None
-        rp = extra.get("reply") if self.chat_extras.get() else None
+        show = self.chat_extras.get()
+        rw = extra.get("reward") if show else None
+        rp = extra.get("reply") if show else None
+        first = bool(extra.get("first")) and show
+        pad = " " if first else ""   # зазор между розовой кромкой и текстом
         block_start = int(w.index("end-1c").split(".")[0])
+        if first:
+            w.insert("end", T("first_msg") + "\n", "firstlbl")
         if rw:
+            w.insert("end", pad, "hdr")
             self._insert_reward_header(w, channel, name, rw)
         if rp:
+            w.insert("end", pad, "hdr")
             self._insert_reply_header(w, rp)
         line_no = int(w.index("end-1c").split(".")[0])
+        if pad:
+            w.insert("end", pad, "msg")
         multi = len(self.cfg.get("channels") or []) > 1
         if multi and channel and w is self.texts.get("*"):
             w.insert("end", "#%s " % channel, "chip")
@@ -4338,6 +4363,8 @@ class OverlayApp:
         if rw:
             w.tag_add("mention" if rw.get("highlight") else "reward",
                       "%d.0" % block_start, "%d.end" % line_no)
+        if first:  # вместе с переводом строки — подложка на всю ширину
+            w.tag_add("first", "%d.0" % block_start, "%d.0" % (line_no + 1))
 
     def _insert_reply_header(self, w, rp):
         """Строка над ответом, как на Twitch: «Ответ @ник: исходное сообщение»."""
