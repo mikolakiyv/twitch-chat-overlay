@@ -99,6 +99,16 @@
   .ov-feed li.rw { background: #2a2a3d; }
   .ov-feed .rwi { display: inline-block; width: 12px; height: 12px; border-radius: 3px; background: #1f69ff; vertical-align: -2px; margin-right: 4px; }
   .ov-feed .pts { display: inline-block; width: 8px; height: 8px; border: 1.5px solid #a3a3ab; border-radius: 50%; vertical-align: 0; margin: 0 3px 0 2px; }
+  .ov-feed li.first { background: #2e1e2b; box-shadow: inset 3px 0 0 #ff6fb4; padding-left: 9px; }
+  .ov-feed .fl { display: block; text-align: right; font-size: .58rem; font-weight: 800; letter-spacing: .06em; color: #ff6fb4; line-height: 1.25; }
+  .ov-feed li.ann { background: #241b33; box-shadow: inset 3px 0 0 var(--accent); padding-left: 9px; }
+  .ov-feed .al { display: block; font-size: .6rem; font-weight: 800; letter-spacing: .06em; color: var(--accent-hi); line-height: 1.3; }
+  .ov-feed .mi { display: inline-flex; gap: 3px; margin-right: 5px; vertical-align: -2px; }
+  .ov-feed .mi svg { width: 12px; height: 12px; stroke: #8f8f97; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .ov-tabs .cnt { color: #ff5c72; font-weight: 700; }
+  .ov-input .emo { width: 18px; height: 18px; border-radius: 50%; border: 1.6px solid #9a9aa3; position: relative; flex: none; }
+  .ov-input .emo::before { content: ""; position: absolute; left: 4px; top: 5px; width: 3px; height: 3px; border-radius: 50%; background: #9a9aa3; box-shadow: 6px 0 0 #9a9aa3; }
+  .ov-input .emo::after { content: ""; position: absolute; left: 4px; top: 8px; width: 7px; height: 4px; border: 1.6px solid #9a9aa3; border-top: 0; border-radius: 0 0 8px 8px; }
   .ov-feed { list-style: none; padding: 8px 10px; height: 252px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
   .ov-feed li { padding: 2.5px 4px; border-radius: 6px; animation: pop .3s ease both; }
   @keyframes pop { from { opacity: 0; transform: translateY(7px); } }
@@ -196,9 +206,9 @@
     <div class="scene" aria-hidden="true">
       <div class="ov">
         <div class="ov-bar"><b>#stream +1</b><span class="sp"></span><i class="h">♥</i><i>⚙</i><i>✕</i></div>
-        <div class="ov-tabs"><span class="on">Все</span><span>#stream</span><span>#games</span><span class="add">＋ ссылка или канал</span></div>
+        <div class="ov-tabs"><span class="on">Все</span><span>#stream</span><span>#games <b class="cnt">✱1</b></span><span class="add">＋ ссылка или канал</span></div>
         <ul class="ov-feed" id="feed"></ul>
-        <div class="ov-input"><span class="chip">#stream ▾</span><span class="field">Написать в чат…</span></div>
+        <div class="ov-input"><span class="chip">#stream ▾</span><span class="field">Написать в чат…</span><span class="emo"></span></div>
       </div>
     </div>
   </header>
@@ -295,31 +305,52 @@
   var VIP = "<img class='badge' alt='' src='" + CDN + "/badges/v1/b817aba4-fad8-49e2-b88a-7cc744dfa6ec/1'>";
   var DINO = "<img alt='DinoDance' src='" + CDN + "/emoticons/v2/emotesv2_dcd06b30a5c24f6eb871e8f5edbd44f7/default/dark/1.0'>";
   var KAPPA = "<img alt='Kappa' src='" + CDN + "/emoticons/v2/25/default/dark/1.0'>";
+  // 7TV через то же зеркало, что и оверлей — грузится и там, где 7TV заблокирован
+  function sv(id, name) {
+    return "<img alt='" + name + "' title='" + name + "' src='https://wsrv.nl/?url=cdn.7tv.app/emote/" + id + "/2x.webp&h=28&output=gif&n=-1'>";
+  }
+  var CLAP = sv("01GAM8EFQ00004MXFXAJYKA859", "Clap");
+  var PETPET = sv("01FE3XY508000AA32JP519W2EW", "PETPET");
+  var PARROT = sv("01FKSDK14G0008TM5NY9QEG0QV", "PartyParrot");
+  var ALIEN = sv("01GB2ZJFBG000DTBJYANG8XYFP", "AlienDance");
+  var PEEPO = sv("01GAZ199Z8000FEWHS6AT5QZV0", "peepoHappy");
+  var EZ = sv("01GB4CK01800090V9B3D8CGEEX", "EZ");
+  var MODI = "<span class='mi'>" +
+    "<svg viewBox='0 0 24 24'><circle cx='12' cy='12' r='9'/><path d='M6 6l12 12'/></svg>" +
+    "<svg viewBox='0 0 24 24'><circle cx='12' cy='12' r='9'/><path d='M12 7v5l3 2'/></svg>" +
+    "<svg viewBox='0 0 24 24'><path d='M12 4l9 16H3z'/><path d='M12 10v4M12 17v.5'/></svg>" +
+    "<svg viewBox='0 0 24 24'><path d='M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13'/></svg>" +
+    "</span>";
   function nick(c, n) { return "<span class='nick' style='color:" + c + "'>" + n + "</span>: "; }
   var POOL = [
     "<span class='sys'>Подключено: #stream</span>",
     MOD + nick("#57d964", "modzilla") + "оверлей висит над игрой и не мешает",
     nick("#ff7f50", "kotleta") + "нажал F9 — остался один текст 👌",
-    SUB + nick("#5c9dff", "quiet_boi") + "смайлы едут без впна " + KAPPA,
-    "<div class='hdr'>↩ Ответ @quiet_boi: смайлы едут без впна</div>" + nick("#ff7f50", "kotleta") + "да, через зеркала",
-    "<div class='hdr rw'><span class='rwi'></span>dancer забирает награду «музыка» · <span class='pts'></span>150</div>" + nick("#ff69b4", "dancer") + "youtu.be/bP4piK-uR8k",
-    nick("#ff69b4", "dancer") + DINO + " " + DINO + " " + DINO,
+    SUB + nick("#5c9dff", "quiet_boi") + "смайлы 7tv едут без впна " + CLAP,
+    "<span class='fl'>ПЕРВОЕ СООБЩЕНИЕ</span>" + nick("#57d964", "a1iveq") + "7 " + PEEPO,
+    "<div class='hdr'>↩ Ответ @quiet_boi: смайлы 7tv едут без впна</div>" + nick("#ff7f50", "kotleta") + "да, через зеркала " + EZ,
+    nick("#ff69b4", "dancer") + PARROT + " " + PARROT + " " + PARROT,
     "<span class='mn'>" + nick("#57d964", "modzilla") + "<b style='color:#a970ff'>@ты</b> глянь, тебя тегнули 💜</span>",
+    "<span class='al'>АНОНС</span>" + MOD + nick("#57d964", "modzilla") + "розыгрыш через 5 минут " + PETPET,
     "<span class='sys'>kotleta подписался на 3 месяца!</span>",
-    VIP + nick("#a970ff", "vip_persona") + "у каждого канала своя вкладка, удобно",
-    nick("#5c9dff", "quiet_boi") + "клик по нику открывает профиль",
-    nick("#ff7f50", "kotleta") + "настройки одним экраном, наконец-то",
+    MODI + VIP + nick("#a970ff", "vip_persona") + "у каждого канала своя вкладка, удобно",
+    "<div class='hdr rw'><span class='rwi'></span>dancer забирает награду «музыка» · <span class='pts'></span>150</div>" + nick("#ff69b4", "dancer") + "youtu.be/bP4piK-uR8k",
+    MODI + nick("#5c9dff", "quiet_boi") + "клик по нику открывает профиль " + ALIEN,
     nick("#57d964", "modzilla") + "F10 открыл только тех, кто в эфире <b style='color:#eb0400'>●</b>",
-    nick("#57d964", "modzilla") + "и всё это 18 мегабайт " + KAPPA,
-    nick("#ff69b4", "dancer") + "анимация смайлов вкл/выкл в настройках"
+    nick("#ff7f50", "kotleta") + "настройки одним экраном, наконец-то",
+    nick("#ff69b4", "dancer") + DINO + " " + DINO + " " + ALIEN,
+    nick("#57d964", "modzilla") + "и всё это 18 мегабайт " + KAPPA
   ];
   var feed = document.getElementById("feed");
   var i = 0, MAX = 9;
   function add() {
     var li = document.createElement("li");
-    li.innerHTML = POOL[i % POOL.length];
-    if (POOL[i % POOL.length].indexOf("class='mn'") > -1) li.className = "mn";
-    if (POOL[i % POOL.length].indexOf("class='hdr rw'") > -1) li.className = "rw";
+    var html = POOL[i % POOL.length];
+    li.innerHTML = html;
+    if (html.indexOf("class='mn'") > -1) li.className = "mn";
+    if (html.indexOf("class='hdr rw'") > -1) li.className = "rw";
+    if (html.indexOf("class='fl'") > -1) li.className = "first";
+    if (html.indexOf("class='al'") > -1) li.className = "ann";
     feed.appendChild(li);
     while (feed.children.length > MAX) feed.removeChild(feed.firstChild);
     i++;
