@@ -91,9 +91,14 @@
   .ov-bar .sp { flex: 1; }
   .ov-bar i { font-style: normal; color: #cfcfd6; font-size: .78rem; }
   .ov-bar i.h { color: var(--accent-hi); }
-  .ov-tabs { display: flex; gap: 2px; background: #1e1e22; padding: 0 8px 6px; font-size: .74rem; color: #a3a3ab; }
+  .ov-tabs { display: flex; gap: 2px; align-items: center; background: #1e1e22; padding: 0 8px 6px; font-size: .74rem; color: #a3a3ab; }
   .ov-tabs span { padding: 2px 7px; }
   .ov-tabs .on { color: var(--accent-hi); font-weight: 700; }
+  .ov-tabs .add { margin-left: auto; background: #26262b; border-radius: 99px; padding: 1px 9px; color: #7e7691; font-size: .68rem; }
+  .ov-feed .hdr { font-size: .7rem; color: #a3a3ab; line-height: 1.35; }
+  .ov-feed li.rw { background: #2a2a3d; }
+  .ov-feed .rwi { display: inline-block; width: 12px; height: 12px; border-radius: 3px; background: #1f69ff; vertical-align: -2px; margin-right: 4px; }
+  .ov-feed .pts { display: inline-block; width: 8px; height: 8px; border: 1.5px solid #a3a3ab; border-radius: 50%; vertical-align: 0; margin: 0 3px 0 2px; }
   .ov-feed { list-style: none; padding: 8px 10px; height: 252px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
   .ov-feed li { padding: 2.5px 4px; border-radius: 6px; animation: pop .3s ease both; }
   @keyframes pop { from { opacity: 0; transform: translateY(7px); } }
@@ -191,7 +196,7 @@
     <div class="scene" aria-hidden="true">
       <div class="ov">
         <div class="ov-bar"><b>#stream +1</b><span class="sp"></span><i class="h">♥</i><i>⚙</i><i>✕</i></div>
-        <div class="ov-tabs"><span class="on">Все</span><span>#stream</span><span>#games</span></div>
+        <div class="ov-tabs"><span class="on">Все</span><span>#stream</span><span>#games</span><span class="add">＋ ссылка или канал</span></div>
         <ul class="ov-feed" id="feed"></ul>
         <div class="ov-input"><span class="chip">#stream ▾</span><span class="field">Написать в чат…</span></div>
       </div>
@@ -249,11 +254,18 @@
   <section>
     <h2>Скриншоты</h2>
     <div class="shots">
-      <figure class="shot"><img src="screenshot_main3.png" width="460" alt="Окно оверлея: вкладки каналов, поле «＋ ссылка или канал», ответ с шапкой как на Twitch, награда за баллы, смайлы" loading="lazy"><figcaption>Обычный режим: вкладки, ответ, награда за баллы, поле «＋ ссылка»</figcaption></figure>
-      <figure class="shot"><img src="screenshot_textonly.png" width="484" alt="Режим «только текст»: чат парит без рамки и фона" loading="lazy"><figcaption>F9 — только текст поверх игры</figcaption></figure>
+      <figure class="shot"><img src="screenshot_main3.png" width="460" alt="Окно оверлея: вкладки каналов, поле «＋ ссылка или канал», ответ с шапкой как на Twitch, награда за баллы, смайлы" loading="lazy"><figcaption>Обычный режим: вкладки, счётчики, поле «＋ ссылка»</figcaption></figure>
+      <figure class="shot"><img src="screenshot_replies.png" width="460" alt="Лента крупно: шапка «↩ Ответ @ник», ответ вам подсвечен, награда за баллы с иконкой и ценой, выделенное сообщение" loading="lazy"><figcaption>Ответы и награды за баллы — как на сайте</figcaption></figure>
+    </div>
+    <div class="shots" style="margin-top:18px">
+      <figure class="shot"><img src="screenshot_addlink.png" width="470" alt="В поле над чатом вставлена ссылка на попаут-чат канала" loading="lazy"><figcaption>Вставили любую ссылку Twitch, Enter — чат открылся вкладкой</figcaption></figure>
+      <figure class="shot"><img src="screenshot_picker.png" width="560" alt="Пикер смайлов: недавние, 7TV канала, Twitch, глобальные — с поиском" loading="lazy"><figcaption>Пикер смайлов Twitch + 7TV с поиском</figcaption></figure>
     </div>
     <div class="shots" style="margin-top:18px">
       <figure class="shot"><img src="screenshot_multichat.png" width="620" alt="Развёрнутый мультичат: три колонки живых каналов с метками ●, оффлайн-канал не открылся" loading="lazy"><figcaption>F10 — открылись только каналы в эфире (●)</figcaption></figure>
+      <figure class="shot"><img src="screenshot_textonly2.png" width="420" alt="Режим «только текст»: чат парит без рамки и фона" loading="lazy"><figcaption>F9 — только текст поверх игры</figcaption></figure>
+    </div>
+    <div class="shots" style="margin-top:18px">
       <figure class="shot"><img src="settings-panel.png" width="420" alt="Панель настроек: слайдеры, переключатели, темы и язык на одном экране" loading="lazy"><figcaption>Все настройки на одном экране</figcaption></figure>
     </div>
   </section>
@@ -288,6 +300,8 @@
     MOD + nick("#57d964", "modzilla") + "оверлей висит над игрой и не мешает",
     nick("#ff7f50", "kotleta") + "нажал F9 — остался один текст 👌",
     SUB + nick("#5c9dff", "quiet_boi") + "смайлы едут без впна " + KAPPA,
+    "<div class='hdr'>↩ Ответ @quiet_boi: смайлы едут без впна</div>" + nick("#ff7f50", "kotleta") + "да, через зеркала",
+    "<div class='hdr rw'><span class='rwi'></span>dancer забирает награду «музыка» · <span class='pts'></span>150</div>" + nick("#ff69b4", "dancer") + "youtu.be/bP4piK-uR8k",
     nick("#ff69b4", "dancer") + DINO + " " + DINO + " " + DINO,
     "<span class='mn'>" + nick("#57d964", "modzilla") + "<b style='color:#a970ff'>@ты</b> глянь, тебя тегнули 💜</span>",
     "<span class='sys'>kotleta подписался на 3 месяца!</span>",
@@ -304,6 +318,7 @@
     var li = document.createElement("li");
     li.innerHTML = POOL[i % POOL.length];
     if (POOL[i % POOL.length].indexOf("class='mn'") > -1) li.className = "mn";
+    if (POOL[i % POOL.length].indexOf("class='hdr rw'") > -1) li.className = "rw";
     feed.appendChild(li);
     while (feed.children.length > MAX) feed.removeChild(feed.firstChild);
     i++;
