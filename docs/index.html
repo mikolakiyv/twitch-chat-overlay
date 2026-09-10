@@ -131,13 +131,18 @@
   h2 { font-family: var(--disp); font-weight: 500; font-size: 1.25rem; margin-bottom: 24px; }
   h2 em { font-style: normal; color: var(--accent-hi); }
 
-  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
   .f {
-    background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
-    padding: 18px 18px 16px; border-left: 3px solid var(--c, var(--accent));
+    display: grid; grid-template-columns: 34px 1fr; gap: 12px; align-items: start;
+    background: linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, .012));
+    border: 1px solid var(--line); border-radius: 14px; padding: 14px 14px 13px;
+    transition: border-color .2s, transform .2s, box-shadow .2s;
   }
-  .f b { display: block; font-size: 1.0rem; margin-bottom: 5px; }
-  .f p { color: var(--mut); font-size: .93rem; line-height: 1.5; }
+  .f:hover { border-color: rgba(169, 112, 255, .45); transform: translateY(-2px); box-shadow: 0 12px 30px rgba(0, 0, 0, .35), 0 0 0 1px rgba(145, 71, 255, .12); }
+  .f .ic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: rgba(255, 255, 255, .06); color: var(--c, var(--accent)); }
+  .f .ic svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .f b { display: block; font-size: .95rem; margin-bottom: 2px; }
+  .f p { color: var(--mut); font-size: .86rem; line-height: 1.45; }
   .f kbd { background: var(--panel); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 1px 7px; font-family: var(--body); font-size: .84rem; color: var(--ink); }
 
   .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
@@ -148,10 +153,23 @@
   .smart { margin-top: 14px; color: var(--mut); font-size: .88rem; background: var(--surface); border: 1px dashed var(--line); border-radius: 12px; padding: 12px 16px; }
   .smart b { color: var(--ink); }
 
-  .shots { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
-  .shot { flex: 0 1 auto; }
-  .shot img { display: block; max-width: 100%; width: auto; border-radius: 12px; border: 1px solid var(--line); box-shadow: 0 16px 48px rgba(0, 0, 0, .45); }
-  .shot figcaption { color: var(--mut); font-size: .84rem; margin-top: 9px; }
+  .show { border: 1px solid var(--line); border-radius: 18px; background: var(--surface); overflow: hidden; }
+  .stage { position: relative; height: 440px; }
+  .sl {
+    position: absolute; inset: 0; display: grid; place-items: center; padding: 22px;
+    opacity: 0; filter: blur(12px); transform: scale(1.04); pointer-events: none;
+    transition: opacity .7s ease, filter .7s ease, transform .7s ease;
+  }
+  .sl.on { opacity: 1; filter: blur(0); transform: none; pointer-events: auto; }
+  .sl img { position: relative; z-index: 1; max-width: 100%; max-height: 100%; width: auto; height: auto; border-radius: 12px; border: 1px solid var(--line); box-shadow: 0 24px 64px rgba(0, 0, 0, .55); user-select: none; }
+  .sl .bg { position: absolute; z-index: 0; inset: -12%; width: 124%; height: 124%; max-width: none; max-height: none; object-fit: cover; filter: blur(30px) saturate(1.4); opacity: .32; border: 0; border-radius: 0; box-shadow: none; }
+  .cap { text-align: center; color: var(--mut); font-size: .92rem; padding: 14px 18px 2px; min-height: 2.4em; }
+  .thumbs { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; padding: 8px 16px 18px; }
+  .th { position: relative; overflow: hidden; background: transparent; border: 1px solid var(--line); color: var(--mut); border-radius: 999px; padding: 6px 13px; font: inherit; font-size: .84rem; cursor: pointer; transition: color .15s, border-color .15s, background .15s; }
+  .th:hover { color: var(--ink); border-color: var(--accent); }
+  .th.on { color: var(--ink); border-color: var(--accent); background: rgba(145, 71, 255, .16); }
+  .th.on::after { content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--accent-hi); transform-origin: left; animation: prog 5.5s linear; }
+  @keyframes prog { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
   /* ── финальный CTA + футер ─────────────────────────── */
   .last { text-align: center; padding: 72px 0 26px; }
@@ -170,10 +188,13 @@
   @media (max-width: 600px) {
     .grid, .steps { grid-template-columns: 1fr; }
     .ov { width: 300px; }
-    .shots { flex-direction: column; }
+    .stage { height: 300px; }
+    .sl { padding: 12px; }
   }
   @media (prefers-reduced-motion: reduce) {
     .ov, .ov-feed li { animation: none; }
+    .sl { transition: none; filter: none; transform: none; }
+    .th.on::after { animation: none; }
   }
 </style>
 </head>
@@ -225,15 +246,15 @@
   <section>
     <h2>Что умеет <em>оверлей</em></h2>
     <div class="grid">
-      <div class="f" style="--c:var(--green)"><b>Поверх всего</b><p>Висит над любой игрой и программой. <kbd>F11</kbd> — во весь экран, «—» — свернуть.</p></div>
-      <div class="f" style="--c:var(--coral)"><b>Только текст — <kbd>F9</kbd></b><p>Остаётся один текст чата. <kbd>Insert</kbd> — текст + поле ввода. <kbd>F8</kbd> — клики сквозь окно.</p></div>
-      <div class="f" style="--c:var(--accent)"><b>Мультичат — <kbd>F10</kbd></b><p>Разворачивается в колонки — только каналы, которые сейчас в эфире (●).</p></div>
-      <div class="f" style="--c:var(--pink)"><b>Смайлы Twitch и 7TV</b><p>Анимированные двигаются. Пикер с поиском. В РФ работают без VPN.</p></div>
-      <div class="f" style="--c:var(--blue)"><b>Как настоящий чат</b><p>Цвета ников, значки, клик по нику — профиль. Ответы, награды за баллы и первые сообщения — как на сайте и в 7TV.</p></div>
-      <div class="f" style="--c:var(--green)"><b>Отправка и анонсы</b><p>Вошли через Twitch — пишете прямо из оверлея. Мегафон шлёт анонс.</p></div>
-      <div class="f" style="--c:var(--coral)"><b>Модерация в ленте</b><p>Бан, таймаут, варн, удалить — кнопки у сообщений там, где вы модер.</p></div>
-      <div class="f" style="--c:var(--pink)"><b>Избранное и наборы</b><p>Частые каналы и наборы «вечер», «турниры» подключаются одним кликом.</p></div>
-      <div class="f" style="--c:var(--blue)"><b>Хромакей для OBS</b><p>Один переключатель — и в захвате окна чат прозрачный.</p></div>
+      <div class="f" style="--c:var(--green)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M12 3l9 5-9 5-9-5 9-5z'/><path d='M3 13l9 5 9-5'/></svg></span><div><b>Поверх всего</b><p>Висит над любой игрой и программой. <kbd>F11</kbd> — во весь экран, «—» — свернуть.</p></div></div>
+      <div class="f" style="--c:var(--coral)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M5 5h14M12 5v14M8 19h8'/></svg></span><div><b>Только текст — <kbd>F9</kbd></b><p>Остаётся один текст чата. <kbd>Insert</kbd> — текст + поле ввода. <kbd>F8</kbd> — клики сквозь окно.</p></div></div>
+      <div class="f" style="--c:var(--accent)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x='3' y='4' width='18' height='16' rx='2'/><path d='M9 4v16M15 4v16'/></svg></span><div><b>Мультичат — <kbd>F10</kbd></b><p>Разворачивается в колонки — только каналы, которые сейчас в эфире (●).</p></div></div>
+      <div class="f" style="--c:var(--pink)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx='12' cy='12' r='9'/><path d='M8.5 14s1.3 2 3.5 2 3.5-2 3.5-2M9 9.5h.01M15 9.5h.01'/></svg></span><div><b>Смайлы Twitch и 7TV</b><p>Анимированные двигаются. Пикер с поиском. В РФ работают без VPN.</p></div></div>
+      <div class="f" style="--c:var(--blue)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M21 12a8 8 0 0 1-8 8H8l-5 3 1.5-4.5A8 8 0 1 1 21 12z'/></svg></span><div><b>Как настоящий чат</b><p>Цвета ников, значки, ответы, награды за баллы, первое сообщение — как на сайте и в 7TV.</p></div></div>
+      <div class="f" style="--c:var(--green)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z'/></svg></span><div><b>Отправка и анонсы</b><p>Вошли через Twitch — пишете прямо из оверлея. Мегафон шлёт анонс.</p></div></div>
+      <div class="f" style="--c:var(--coral)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z'/></svg></span><div><b>Модерация в ленте</b><p>Бан, таймаут, варн, удалить — кнопки у сообщений там, где вы модер.</p></div></div>
+      <div class="f" style="--c:var(--pink)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M12 3l2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9L12 3z'/></svg></span><div><b>Избранное и наборы</b><p>Частые каналы и наборы «вечер», «турниры» подключаются одним кликом.</p></div></div>
+      <div class="f" style="--c:var(--blue)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x='3' y='7' width='13' height='10' rx='2'/><path d='M16 10l5-3v10l-5-3'/></svg></span><div><b>Хромакей для OBS</b><p>Один переключатель — и в захвате окна чат прозрачный.</p></div></div>
     </div>
   </section>
 
@@ -264,20 +285,24 @@
 
   <section>
     <h2>Скриншоты</h2>
-    <div class="shots">
-      <figure class="shot"><img src="screenshot_main3.png" width="460" alt="Окно оверлея: вкладки каналов, поле «＋ ссылка или канал», ответ с шапкой как на Twitch, награда за баллы, смайлы" loading="lazy"><figcaption>Обычный режим: вкладки, счётчики, поле «＋ ссылка»</figcaption></figure>
-      <figure class="shot"><img src="screenshot_replies.png" width="460" alt="Лента крупно: шапка «↩ Ответ @ник», ответ вам подсвечен, награда за баллы с иконкой и ценой, выделенное сообщение" loading="lazy"><figcaption>Ответы и награды за баллы — как на сайте</figcaption></figure>
-    </div>
-    <div class="shots" style="margin-top:18px">
-      <figure class="shot"><img src="screenshot_addlink.png" width="470" alt="В поле над чатом вставлена ссылка на попаут-чат канала" loading="lazy"><figcaption>Вставили любую ссылку Twitch, Enter — чат открылся вкладкой</figcaption></figure>
-      <figure class="shot"><img src="screenshot_picker.png" width="560" alt="Пикер смайлов: недавние, 7TV канала, Twitch, глобальные — с поиском" loading="lazy"><figcaption>Пикер смайлов Twitch + 7TV с поиском</figcaption></figure>
-    </div>
-    <div class="shots" style="margin-top:18px">
-      <figure class="shot"><img src="screenshot_multichat.png" width="620" alt="Развёрнутый мультичат: три колонки живых каналов с метками ●, оффлайн-канал не открылся" loading="lazy"><figcaption>F10 — открылись только каналы в эфире (●)</figcaption></figure>
-      <figure class="shot"><img src="screenshot_textonly2.png" width="420" alt="Режим «только текст»: чат парит без рамки и фона" loading="lazy"><figcaption>F9 — только текст поверх игры</figcaption></figure>
-    </div>
-    <div class="shots" style="margin-top:18px">
-      <figure class="shot"><img src="settings-panel.png" width="420" alt="Панель настроек: слайдеры, переключатели, темы и язык на одном экране" loading="lazy"><figcaption>Все настройки на одном экране</figcaption></figure>
+    <div class="show" id="show">
+      <div class="stage">
+        <figure class="sl on" data-cap="Вкладки со счётчиком упоминаний, значки, смайлы и поле «＋ ссылка или канал» над чатом"><img src="screenshot_main3.png" alt="Окно оверлея: вкладки каналов, поле «＋ ссылка или канал», ответ с шапкой как на Twitch, награда за баллы, смайлы"><img class="bg" src="screenshot_main3.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl" data-cap="Шапка «↩ Ответ @ник», ответ вам подсвечен, награда за баллы с иконкой и ценой, первое сообщение — как в 7TV"><img src="screenshot_replies.png" alt="Лента крупно: шапка ответа, подсвеченный ответ, награда за баллы, выделенное и первое сообщение"><img class="bg" src="screenshot_replies.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl" data-cap="F10 открыл колонками только каналы в эфире (●) — четвёртый оффлайн, и колонки у него нет"><img src="screenshot_multichat.png" alt="Развёрнутый мультичат: три колонки живых каналов с метками ●"><img class="bg" src="screenshot_multichat.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl" data-cap="Без рамки и фона — над игрой парит один чат, ответы и награды видны и тут"><img src="screenshot_textonly2.png" alt="Режим «только текст»: чат парит без рамки и фона"><img class="bg" src="screenshot_textonly2.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl" data-cap="Смайлы Twitch и 7TV с поиском и недавними — только те, что работают на выбранном канале"><img src="screenshot_picker.png" alt="Пикер смайлов: поиск и сетка смайлов 7TV канала"><img class="bg" src="screenshot_picker.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl" data-cap="Все настройки на одном экране: каналы, избранное, режимы с клавишами, вид, тема, язык"><img src="settings-panel.png" alt="Панель настроек: слайдеры, переключатели, темы и язык на одном экране"><img class="bg" src="settings-panel.png" alt="" aria-hidden="true"></figure>
+      </div>
+      <p class="cap" id="cap">Вкладки со счётчиком упоминаний, значки, смайлы и поле «＋ ссылка или канал» над чатом</p>
+      <div class="thumbs" role="tablist" aria-label="Скриншоты">
+        <button class="th on" type="button" role="tab" aria-selected="true">Обычный режим</button>
+        <button class="th" type="button" role="tab" aria-selected="false">Ответы и награды</button>
+        <button class="th" type="button" role="tab" aria-selected="false">Мультичат F10</button>
+        <button class="th" type="button" role="tab" aria-selected="false">Только текст F9</button>
+        <button class="th" type="button" role="tab" aria-selected="false">Пикер смайлов</button>
+        <button class="th" type="button" role="tab" aria-selected="false">Настройки</button>
+      </div>
     </div>
   </section>
 
@@ -365,6 +390,37 @@
       if (d && d.tag_name) document.getElementById("ver").textContent = d.tag_name;
     })
     .catch(function () {});
+})();
+(function () {  // карусель скриншотов: кроссфейд с размытием, автопрокрутка, пауза при наведении
+  var slides = [].slice.call(document.querySelectorAll("#show .sl"));
+  var thumbs = [].slice.call(document.querySelectorAll("#show .th"));
+  var cap = document.getElementById("cap");
+  var show = document.getElementById("show");
+  if (!slides.length || !show) return;
+  var cur = 0, timer = null, hover = false;
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function arm(ms) {
+    clearTimeout(timer);
+    if (!reduce && !hover) timer = setTimeout(function () { go(cur + 1); }, ms || 5500);
+  }
+  function go(n) {
+    cur = (n + slides.length) % slides.length;
+    slides.forEach(function (s, i) { s.classList.toggle("on", i === cur); });
+    thumbs.forEach(function (t, i) {
+      t.classList.toggle("on", i === cur);
+      t.setAttribute("aria-selected", i === cur ? "true" : "false");
+    });
+    cap.textContent = slides[cur].getAttribute("data-cap");
+    arm();
+  }
+  thumbs.forEach(function (t, i) { t.addEventListener("click", function () { go(i); }); });
+  show.addEventListener("mouseenter", function () { hover = true; clearTimeout(timer); });
+  show.addEventListener("mouseleave", function () { hover = false; arm(2500); });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowRight") go(cur + 1);
+    else if (e.key === "ArrowLeft") go(cur - 1);
+  });
+  arm();
 })();
 </script>
 </body>
