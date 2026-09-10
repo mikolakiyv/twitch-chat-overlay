@@ -19,6 +19,7 @@ by aliveenjoyer (twitch.tv/aliveenjoyer)
 
 import base64
 import ctypes
+import hashlib
 import json
 import os
 import queue
@@ -26,6 +27,7 @@ import random
 import re
 import socket
 import ssl
+import subprocess
 import sys
 import threading
 import time
@@ -54,6 +56,11 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "overlay_config.json")
+APP_VERSION = "1.17.0"
+GITHUB_REPO = "mikolakiyv/twitch-chat-overlay"
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+# файл самой программы: exe или .pyw — обновление подменяет именно его
+SELF_PATH = sys.executable if IS_FROZEN else os.path.abspath(__file__)
 CACHE_DIR = os.path.join(APP_DIR, ".emote_cache")
 BADGE_CACHE_DIR = os.path.join(APP_DIR, ".badge_cache")
 
@@ -229,6 +236,7 @@ DEFAULTS = {
     "obs_chroma": False,
     "mod_icons": True,
     "chat_extras": True,
+    "auto_update": True,
     "key_clickthrough": {"vk": 119, "name": "F8"},
     "key_frameless": {"vk": 120, "name": "F9"},
     "key_expand": {"vk": 121, "name": "F10"},
@@ -301,6 +309,16 @@ STRINGS = {
         "s_modicons": "Кнопки модерации в чате",
         "s_extras": "Ответы, награды, первые сообщения",
         "first_msg": "ПЕРВОЕ СООБЩЕНИЕ",
+        "s_autoupd": "Автообновление (скачивать новые версии в фоне)",
+        "upd_check": "Проверить обновления",
+        "upd_avail": "Доступна версия %s — нажмите ⟳ в шапке, чтобы обновиться",
+        "upd_downloading": "Скачиваю обновление %s…",
+        "upd_ready": "Обновление %s скачано — включится при следующем запуске. "
+                     "Нажмите ⟳ в шапке, чтобы перезапустить сейчас",
+        "upd_restart": "Перезапуск с версией %s…",
+        "upd_fail": "Обновление не удалось: %s",
+        "upd_none": "У вас последняя версия (v%s)",
+        "upd_hint": "Доступно обновление — нажмите, чтобы перезапустить с новой версией",
         "hdr_reply": "Ответ ",
         "rw_line": "%s забирает награду «%s»",
         "rw_generic": "%s забирает награду за баллы",
@@ -455,6 +473,16 @@ STRINGS = {
         "s_modicons": "Mod buttons in chat",
         "s_extras": "Replies, rewards, first messages",
         "first_msg": "FIRST MESSAGE",
+        "s_autoupd": "Auto-update (download new versions in background)",
+        "upd_check": "Check for updates",
+        "upd_avail": "Version %s is available — click ⟳ in the title bar to update",
+        "upd_downloading": "Downloading update %s…",
+        "upd_ready": "Update %s downloaded — it starts next launch. "
+                     "Click ⟳ in the title bar to restart now",
+        "upd_restart": "Restarting with version %s…",
+        "upd_fail": "Update failed: %s",
+        "upd_none": "You have the latest version (v%s)",
+        "upd_hint": "Update available — click to restart with the new version",
         "hdr_reply": "Replying to ",
         "rw_line": "%s redeemed %s",
         "rw_generic": "%s redeemed a channel points reward",
@@ -2055,6 +2083,15 @@ class OverlayApp:
         self.mod_icons = tk.BooleanVar(value=bool(cfg.get("mod_icons", True)))
         self.chat_extras = tk.BooleanVar(value=bool(cfg.get("chat_extras", True)))
         self._rw_refresh_at = {}   # канал -> время последней дозагрузки наград
+        self.auto_update = tk.BooleanVar(value=bool(cfg.get("auto_update", True)))
+        # автообновление: idle → available → downloading → ready | failed
+        self._upd = {"state": "idle", "rel": None, "tag": "", "path": None, "err": "",
+                     "apply": False}
+        self._upd_dirty = False
+        self._upd_note = None
+        self._upd_last = None
+        self._upd_btn_shown = False
+        self.root.after(20000, self._periodic_update_check)
 
         root.overrideredirect(True)
         root.attributes("-topmost", True)
@@ -2097,6 +2134,11 @@ class OverlayApp:
         self.min_btn = tk.Label(self.bar, text=" — ", bg=BAR_BG, fg=BTN_FG,
                                 font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.min_btn.pack(side="right")
+        # ⟳ появляется только когда есть обновление
+        self.upd_btn = tk.Label(self.bar, text="", bg=BAR_BG, fg=ACCENT,
+                                font=(base_family, 10, "bold"), cursor="hand2", padx=4)
+        self.upd_btn.bind("<Button-1>", lambda e: self.start_update())
+        Tooltip(self.upd_btn, "upd_hint")
         self.min_btn.bind("<Button-1>", lambda e: self.minimize_window())
         self.close_btn.bind("<Button-1>", lambda e: self.quit())
         self.gear_btn.bind("<Button-1>", self.open_settings)
@@ -2352,6 +2394,8 @@ class OverlayApp:
                        command=self._save_mod_icons, **chk).pack(side="left")
         tk.Checkbutton(row(), text=T("s_extras"), variable=self.chat_extras,
                        command=self._save_chat_extras, **chk).pack(side="left")
+        tk.Checkbutton(row(), text=T("s_autoupd"), variable=self.auto_update,
+                       command=self._save_auto_update, **chk).pack(side="left")
 
         # --- вид: светлые слайдеры-пилюли ---
         header("s_appear")
@@ -2413,9 +2457,13 @@ class OverlayApp:
                        font=("Segoe UI", 10, "bold"), cursor="hand2")
         sup.pack(side="left")
         sup.bind("<Button-1>", lambda e: webbrowser.open(DONATE_URL))
-        ab = tk.Label(r, text=T("s_about"), bg=BG, fg=SYS_FG, font=lbl_font, cursor="hand2")
+        ab = tk.Label(r, text="%s · v%s" % (T("s_about"), APP_VERSION), bg=BG, fg=SYS_FG,
+                      font=lbl_font, cursor="hand2")
         ab.pack(side="left", padx=(14, 0))
         ab.bind("<Button-1>", lambda e: self.about_dialog())
+        up = tk.Label(r, text=T("upd_check"), bg=BG, fg=SYS_FG, font=lbl_font, cursor="hand2")
+        up.pack(side="left", padx=(14, 0))
+        up.bind("<Button-1>", lambda e: self.check_updates(manual=True))
         q = tk.Label(r, text=T("m_quit"), bg=BG, fg="#e06c6c", font=lbl_font, cursor="hand2")
         q.pack(side="right")
         q.bind("<Button-1>", lambda e: self.quit())
@@ -3255,6 +3303,116 @@ class OverlayApp:
         self.cfg["chat_extras"] = bool(self.chat_extras.get())
         save_config(self.cfg)
 
+    def _save_auto_update(self):
+        self.cfg["auto_update"] = bool(self.auto_update.get())
+        save_config(self.cfg)
+
+    # ---- автообновление ----
+    def _periodic_update_check(self):
+        self.check_updates()
+        self.root.after(6 * 3600 * 1000, self._periodic_update_check)
+
+    def check_updates(self, manual=False):
+        """Фоново узнаёт последний релиз; при автообновлении сразу качает файл."""
+        st = self._upd
+        if st["state"] == "downloading":
+            return
+        auto = bool(self.cfg.get("auto_update", True))
+
+        def run():
+            rel = fetch_latest_release()
+            if rel is None:
+                if manual:
+                    self._upd_note = ("fail", "нет связи с GitHub")
+                    self._upd_dirty = True
+                return
+            if rel["version"] <= parse_version(APP_VERSION):
+                if manual:
+                    self._upd_note = ("none",)
+                    self._upd_dirty = True
+                return
+            if st["state"] == "ready" and st["tag"] == rel["tag"]:
+                return   # уже скачано и ждёт перезапуска
+            st.update(rel=rel, tag=rel["tag"], err="")
+            if auto or manual:       # без лишнего «доступна…» — сразу качаем
+                self._download_update()
+            else:
+                st["state"] = "available"
+                self._upd_dirty = True
+        DOWNLOAD_POOL.submit(run)
+
+    def _download_update(self):
+        st = self._upd
+        st["state"] = "downloading"
+        self._upd_dirty = True
+        rel = st["rel"]
+
+        def run():
+            try:
+                st.update(path=download_update(rel), state="ready")
+            except Exception as e:
+                st.update(state="failed", err=str(e), apply=False)
+            self._upd_dirty = True
+        DOWNLOAD_POOL.submit(run)
+
+    def start_update(self):
+        """Клик по ⟳: докачать, если надо, и перезапуститься с новой версией."""
+        st = self._upd
+        if st["state"] == "ready":
+            self._apply_update_now()
+        elif st["state"] in ("available", "failed"):
+            st["apply"] = True
+            self._download_update()
+        elif st["state"] == "downloading":
+            st["apply"] = True   # применим сразу, как докачается
+        else:
+            self.check_updates(manual=True)
+
+    def _apply_update_now(self):
+        st = self._upd
+        try:
+            old = swap_in_update(st["path"])
+            restart_into(SELF_PATH, old)
+        except Exception as e:
+            st.update(state="failed", err=str(e), apply=False, path=None)
+            self._upd_last = None
+            self._upd_dirty = True
+            return
+        self.sys_message(T("upd_restart", st["tag"]))
+        self.root.after(400, self.quit)
+
+    def _upd_refresh_ui(self):
+        """Сообщения в ленте и кнопка ⟳ по состоянию обновления (из poll_queue)."""
+        st = self._upd
+        note, self._upd_note = self._upd_note, None
+        if note:
+            self.sys_message(T("upd_none", APP_VERSION) if note[0] == "none"
+                             else T("upd_fail", note[1]))
+        key = (st["state"], st["tag"])
+        if key != self._upd_last:
+            self._upd_last = key
+            if st["state"] == "available":
+                self.sys_message(T("upd_avail", st["tag"]))
+            elif st["state"] == "downloading":
+                self.sys_message(T("upd_downloading", st["tag"]))
+            elif st["state"] == "ready":
+                if st["apply"]:
+                    self._apply_update_now()
+                    return
+                self.sys_message(T("upd_ready", st["tag"]))
+            elif st["state"] == "failed":
+                self.sys_message(T("upd_fail", st["err"] or "?"))
+        show = st["state"] in ("available", "downloading", "ready", "failed")
+        if show:
+            self.upd_btn.configure(text=" ⟳ … " if st["state"] == "downloading"
+                                   else " ⟳ %s " % st["tag"], bg=BAR_BG, fg=ACCENT)
+            if not self._upd_btn_shown:
+                self.upd_btn.pack(side="right")
+                self._upd_btn_shown = True
+        elif self._upd_btn_shown:
+            self.upd_btn.pack_forget()
+            self._upd_btn_shown = False
+
     def _save_mod_icons(self):
         self.cfg["mod_icons"] = bool(self.mod_icons.get())
         save_config(self.cfg)
@@ -3624,6 +3782,9 @@ class OverlayApp:
             except tk.TclError:
                 pass
         self._sync_announce_icon()  # статус модерки приходит из USERSTATE асинхронно
+        if self._upd_dirty:
+            self._upd_dirty = False
+            self._upd_refresh_ui()
         if self._live_dirty:
             self._live_dirty = False
             changed = (self._live or set()) != self._live_applied
@@ -4473,12 +4634,198 @@ def cleanup_disk_caches():
             pass
 
 
+# ---------------------------------------------------------------- автообновление
+#
+# Программа знает свою версию (APP_VERSION), спрашивает GitHub о последнем
+# релизе, качает файл рядом с собой в SELF_PATH+".new", проверяет размер и
+# sha256 и ставит его при следующем запуске (или сразу — по клику ⟳).
+# Работающий exe в Windows нельзя перезаписать, но можно переименовать:
+# текущий → .old, скачанный → на его место, новая версия при старте
+# дожидается выхода старой и удаляет .old.
+
+def parse_version(tag):
+    nums = [int(x) for x in re.findall(r"\d+", tag or "")[:3]]
+    return tuple(nums + [0] * (3 - len(nums)))
+
+
+def _gh_request(url, accept=None):
+    h = {"User-Agent": "TwitchChatOverlay/" + APP_VERSION}
+    if accept:
+        h["Accept"] = accept
+    return urllib.request.Request(url, headers=h)
+
+
+def fetch_latest_release():
+    """Последний релиз на GitHub: {'tag','version','assets': {имя: {'url','size'}}} или None."""
+    try:
+        req = _gh_request("https://api.github.com/repos/%s/releases/latest" % GITHUB_REPO,
+                          "application/vnd.github+json")
+        with urllib.request.urlopen(req, timeout=10, context=SSL_CTX) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        tag = d.get("tag_name") or ""
+        if not tag:
+            return None
+        prefix = "https://github.com/%s/releases/download/" % GITHUB_REPO
+        assets = {}
+        for a in d.get("assets") or []:
+            url = a.get("browser_download_url") or ""
+            if a.get("name") and url.startswith(prefix):   # только файлы нашего репозитория
+                assets[a["name"]] = {"url": url, "size": int(a.get("size") or 0)}
+        return {"tag": tag, "version": parse_version(tag), "assets": assets}
+    except Exception as e:
+        dbg("! update check:", e)
+        return None
+
+
+def download_update(release):
+    """Качает файл новой версии в SELF_PATH+'.new', проверяет его. Путь или исключение."""
+    dest = SELF_PATH + ".new"
+    expected = None
+    if IS_FROZEN:
+        name = os.path.basename(SELF_PATH)
+        asset = release["assets"].get(name)
+        if not asset:
+            raise RuntimeError("в релизе нет " + name)
+        url, size = asset["url"], asset["size"]
+        sha = release["assets"].get(name + ".sha256")
+        if sha:
+            with urllib.request.urlopen(_gh_request(sha["url"]), timeout=10, context=SSL_CTX) as r:
+                m = re.search(r"[0-9a-fA-F]{64}", r.read(4096).decode("utf-8", "replace"))
+            expected = m.group(0).lower() if m else None
+    else:
+        url = "https://raw.githubusercontent.com/%s/%s/twitch_chat_overlay.pyw" % (
+            GITHUB_REPO, release["tag"])
+        size = 0
+    tmp = dest + ".part"
+    h = hashlib.sha256()
+    total = 0
+    with urllib.request.urlopen(_gh_request(url), timeout=30, context=SSL_CTX) as r, \
+            open(tmp, "wb") as f:
+        while True:
+            chunk = r.read(65536)
+            if not chunk:
+                break
+            f.write(chunk)
+            h.update(chunk)
+            total += len(chunk)
+            if total > 80 * 1024 * 1024:
+                raise RuntimeError("файл подозрительно большой")
+    try:
+        if size and total != size:
+            raise RuntimeError("размер не совпал (%d ≠ %d)" % (total, size))
+        if expected and h.hexdigest() != expected:
+            raise RuntimeError("контрольная сумма не совпала")
+        _check_update_file(tmp)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    os.replace(tmp, dest)
+    return dest
+
+
+def _check_update_file(path):
+    """Скачанное — точно наша программа: exe с PE-заголовком или компилируемый .pyw."""
+    if os.path.getsize(path) < 1000:
+        raise RuntimeError("файл обновления пустой")
+    with open(path, "rb") as f:
+        data = f.read() if not IS_FROZEN else f.read(2)
+    if IS_FROZEN:
+        if data != b"MZ":
+            raise RuntimeError("это не exe")
+    else:
+        compile(data, "twitch_chat_overlay.pyw", "exec")
+        if b"class OverlayApp" not in data:
+            raise RuntimeError("это не оверлей")
+
+
+def swap_in_update(new_path):
+    """Подменяет файл программы скачанным: текущий → .old, .new → на место. Путь .old."""
+    old = SELF_PATH + ".old"
+    try:
+        os.remove(old)
+    except OSError:
+        pass
+    os.replace(SELF_PATH, old)      # работающий exe переименовать можно, удалить — нет
+    try:
+        os.replace(new_path, SELF_PATH)
+    except OSError:
+        os.replace(old, SELF_PATH)  # откат
+        raise
+    return old
+
+
+def restart_into(path, old_path=None):
+    """Запускает новую версию; ей передаём, кого дождаться и что убрать."""
+    args = [path] if IS_FROZEN else [sys.executable, path]
+    args += ["--updated-from", str(os.getpid())]
+    if old_path:
+        args += ["--cleanup", old_path]
+    flags = 0x00000008 | 0x00000200   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    # Служебные переменные PyInstaller (_PYI_ARCHIVE_FILE и др.) нельзя передавать
+    # новому exe: иначе он считает себя «ребёнком» старого процесса и падает на
+    # проверке «parent process has different executable» (старый уже переименован).
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("_PYI_") and k != "_MEIPASS2"}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    subprocess.Popen(args, close_fds=True, creationflags=flags,
+                     cwd=os.path.dirname(path) or None, env=env)
+
+
+def apply_pending_update():
+    """При старте: рядом лежит скачанное обновление — подменяемся и перезапускаемся.
+    True = новая версия уже запущена, текущему процессу надо выйти."""
+    new = SELF_PATH + ".new"
+    if not os.path.isfile(new):
+        return False
+    try:
+        _check_update_file(new)
+        old = swap_in_update(new)
+        restart_into(SELF_PATH, old)
+        return True
+    except Exception as e:
+        dbg("! apply update:", e)
+        try:
+            os.remove(new)
+        except OSError:
+            pass
+        return False
+
+
+def finish_update_cleanup(argv):
+    """Новая версия после перезапуска: старый файл удаляется, как только тот процесс вышел."""
+    if "--cleanup" not in argv:
+        return
+    try:
+        old = argv[argv.index("--cleanup") + 1]
+    except IndexError:
+        return
+    for _ in range(50):   # до ~15 с
+        try:
+            os.remove(old)
+            return
+        except OSError:
+            time.sleep(0.3)
+
+
+_MUTEX_HANDLE = None
+
+
 def already_running():
     """Один экземпляр: повторный запуск молча выходит (оверлей уже на экране)."""
+    global _MUTEX_HANDLE
     try:
         kernel32 = ctypes.windll.kernel32
-        kernel32.CreateMutexW(None, False, "Local\\TwitchChatOverlayMutex")
-        return kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        h = kernel32.CreateMutexW(None, False, "Local\\TwitchChatOverlayMutex")
+        if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            if h:  # иначе наш же хэндл держит мьютекс живым и после выхода старого процесса
+                kernel32.CloseHandle(ctypes.c_void_p(h))
+            return True
+        _MUTEX_HANDLE = h
+        return False
     except Exception:
         return False
 
@@ -4489,8 +4836,20 @@ def main():
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
-    if already_running():
-        return
+    if "--updated-from" in sys.argv:
+        # нас запустила старая версия — она ещё выходит и держит мьютекс
+        for _ in range(50):
+            if not already_running():
+                break
+            time.sleep(0.3)
+        else:
+            return
+    else:
+        if already_running():
+            return
+        if apply_pending_update():   # скачанное обновление ставится до всего остального
+            return
+    finish_update_cleanup(sys.argv)
     # чёткий текст при масштабировании Windows
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
