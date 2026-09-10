@@ -28,6 +28,7 @@ import socket
 import ssl
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -63,13 +64,13 @@ PALETTES = {
                    accent_hover="#e89b7f", accent_active="#b85c3e",
                    mention="#503527", entry="#30302b", chipbtn="#34332e",
                    select="#4a4740", grip="#6b665d", btnfg="#cac5bb",
-                   slider_track="#cfc8ba", slider_knob="#f6f2e9"),
+                   slider_track="#cfc8ba", slider_knob="#f6f2e9", reward="#33322c"),
     "twitch": dict(bg="#17171a", bar="#1e1e22", border="#3a3a41", fg="#efeff1",
                    sys="#a3a3ab", chip="#a6a6ae", accent="#9147ff",
                    accent_hover="#c39cff", accent_active="#772ce8",
                    mention="#3d2a66", entry="#26262b", chipbtn="#2e2e35",
                    select="#404049", grip="#63636b", btnfg="#cfcfd6",
-                   slider_track="#c9cbd6", slider_knob="#f4f4f8"),
+                   slider_track="#c9cbd6", slider_knob="#f4f4f8", reward="#2a2a3d"),
 }
 
 
@@ -77,8 +78,9 @@ def apply_palette(name):
     """Назначает глобальные цвета из выбранной темы (BG — ключ прозрачности)."""
     global BG, BAR_BG, BORDER, FG, SYS_FG, CHIP_FG, ACCENT, ACCENT_HOVER
     global ACCENT_ACTIVE, MENTION_BG, ENTRY_BG, CHIPBTN_BG, SELECT_BG, GRIP_FG, BTN_FG
-    global SLIDER_TRACK, SLIDER_KNOB
+    global SLIDER_TRACK, SLIDER_KNOB, REWARD_BG
     p = PALETTES.get(name) or PALETTES["claude"]
+    REWARD_BG = p["reward"]
     BG = p["bg"]
     BAR_BG = p["bar"]
     BORDER = p["border"]
@@ -222,6 +224,7 @@ DEFAULTS = {
     "animations": True,
     "obs_chroma": False,
     "mod_icons": True,
+    "chat_extras": True,
     "key_clickthrough": {"vk": 119, "name": "F8"},
     "key_frameless": {"vk": 120, "name": "F9"},
     "key_expand": {"vk": 121, "name": "F10"},
@@ -290,6 +293,14 @@ STRINGS = {
         "act_ban": "Забанить",
         "act_ban_confirm": "Точно забанить?",
         "s_modicons": "Кнопки модерации в чате",
+        "s_extras": "Ответы и награды за баллы в чате",
+        "hdr_reply": "Ответ ",
+        "rw_line": "%s забирает награду «%s»",
+        "rw_generic": "%s забирает награду за баллы",
+        "rw_SEND_HIGHLIGHTED_MESSAGE": "Выделить сообщение",
+        "rw_SEND_GIGANTIFIED_EMOTE": "Увеличенный смайл",
+        "rw_SEND_ANIMATED_MESSAGE": "Эффект сообщения",
+        "rw_SINGLE_MESSAGE_BYPASS_SUB_MODE": "Сообщение в саб-режиме",
         "ban_arm": "Ещё раз по значку бана в течение 3 сек — бан %s",
         "ann_sent": "📢 Анонс отправлен",
         "tt_announce": "Отправить как анонс",
@@ -433,6 +444,14 @@ STRINGS = {
         "act_ban": "Ban",
         "act_ban_confirm": "Really ban?",
         "s_modicons": "Mod buttons in chat",
+        "s_extras": "Replies & channel point rewards in chat",
+        "hdr_reply": "Replying to ",
+        "rw_line": "%s redeemed %s",
+        "rw_generic": "%s redeemed a channel points reward",
+        "rw_SEND_HIGHLIGHTED_MESSAGE": "Highlight My Message",
+        "rw_SEND_GIGANTIFIED_EMOTE": "Gigantify an Emote",
+        "rw_SEND_ANIMATED_MESSAGE": "Message Effects",
+        "rw_SINGLE_MESSAGE_BYPASS_SUB_MODE": "Message in Sub-Only Mode",
         "ban_arm": "Click the ban icon again within 3 s to ban %s",
         "ann_sent": "📢 Announcement sent",
         "tt_announce": "Send as announcement",
@@ -604,6 +623,14 @@ class LruDict:
 
 EMOTE_CACHE = LruDict(500)        # id -> base64 PNG или None (не удалось скачать)
 BADGE_IMG_CACHE = LruDict(300)    # url -> base64 PNG или None
+REWARD_ICON_CACHE = LruDict(150)  # ключ награды -> собранная иконка (base64) или None
+# встроенные награды Twitch приходят в IRC как msg-id, а не custom-reward-id
+AUTO_REWARD_MSGIDS = {
+    "highlighted-message": "SEND_HIGHLIGHTED_MESSAGE",
+    "gigantified-emote-message": "SEND_GIGANTIFIED_EMOTE",
+    "animated-message": "SEND_ANIMATED_MESSAGE",
+    "skip-subs-mode-message": "SINGLE_MESSAGE_BYPASS_SUB_MODE",
+}
 SEVENTV_IMG_CACHE = LruDict(600)    # 7tv id -> payload или None
 SEVENTV_THUMB_CACHE = LruDict(800)  # 7tv id -> статичный PNG-превью (для пикера)
 DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=8)  # параллельная докачка картинок
@@ -1151,6 +1178,155 @@ def fetch_live_set(channels):
         return None
 
 
+def fetch_reward_maps(channels):
+    """Награды за баллы каналов (GQL без логина).
+
+    {канал: {'icon': url|None, 'rewards': {id: {title, cost, bg, icon}},
+             'auto': {TYPE: {cost, bg, icon}}}}. В IRC приходит только id
+    награды — название, цена и иконка берутся отсюда.
+    """
+    out = {}
+    try:
+        q = ("query($logins:[String!]!){ users(logins:$logins){ login channel { "
+             "communityPointsSettings { image { url } "
+             "customRewards { id title cost isEnabled backgroundColor image { url } defaultImage { url } } "
+             "automaticRewards { type cost isEnabled backgroundColor image { url } defaultImage { url } } "
+             "} } } }")
+        body = json.dumps({"query": q,
+                           "variables": {"logins": list(channels)[:35]}}).encode("utf-8")
+        req = urllib.request.Request(GQL_URL, data=body, headers={
+            "Client-ID": GQL_CLIENT_ID,
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0",
+        })
+        with urllib.request.urlopen(req, timeout=10, context=SSL_CTX) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        for u in (data.get("data") or {}).get("users") or []:
+            if not u or not u.get("login"):
+                continue
+            cps = (u.get("channel") or {}).get("communityPointsSettings") or {}
+
+            def icon_of(rw):
+                return ((rw.get("image") or rw.get("defaultImage") or {}).get("url"))
+            rewards = {}
+            for rw in cps.get("customRewards") or []:
+                if rw and rw.get("id"):
+                    rewards[rw["id"]] = {"title": rw.get("title") or "", "cost": rw.get("cost") or 0,
+                                         "bg": rw.get("backgroundColor") or "", "icon": icon_of(rw)}
+            auto = {}
+            for rw in cps.get("automaticRewards") or []:
+                if rw and rw.get("type"):
+                    auto[rw["type"]] = {"cost": rw.get("cost") or 0,
+                                        "bg": rw.get("backgroundColor") or "", "icon": icon_of(rw)}
+            out[u["login"].lower()] = {"icon": (cps.get("image") or {}).get("url"),
+                                       "rewards": rewards, "auto": auto}
+    except Exception as e:
+        dbg("! rewards:", e)
+    return out
+
+
+def lookup_reward(reward_maps, channel, rid, msg_id):
+    """Какая награда стоит за сообщением (без сети). rid — custom-reward-id,
+    msg_id — встроенные награды. None, если это не награда."""
+    cm = reward_maps.get(channel) or {}
+    if rid:
+        info = (cm.get("rewards") or {}).get(rid)
+        rw = {"key": "rw:" + rid, "title": None, "cost": None, "bg": "",
+              "icon_url": None, "highlight": False, "unknown": info is None}
+        if info:
+            rw.update(title=info["title"], cost=info["cost"], bg=info["bg"], icon_url=info["icon"])
+    else:
+        atype = AUTO_REWARD_MSGIDS.get(msg_id)
+        if not atype:
+            return None
+        info = (cm.get("auto") or {}).get(atype) or {}
+        rw = {"key": "rwa:%s:%s" % (channel, atype), "title": T("rw_" + atype),
+              "cost": info.get("cost"), "bg": info.get("bg") or "", "icon_url": info.get("icon"),
+              "highlight": msg_id == "highlighted-message", "unknown": False}
+    rw["pts_url"] = cm.get("icon")
+    return rw
+
+
+def _png_b64(img):
+    buf = _io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def compose_reward_icon(icon_b64, bg_hex, size):
+    """Иконка награды как на Twitch: картинка на скруглённой цветной плашке."""
+    if not HAS_PIL:
+        return None
+    try:
+        ss = 4
+        S = size * ss
+        try:
+            bg = _hex_to_rgb(bg_hex)
+        except Exception:
+            bg = (145, 71, 255)
+        img = _PILImage.new("RGBA", (S, S), (0, 0, 0, 0))
+        _PILDraw.Draw(img).rounded_rectangle([0, 0, S - 1, S - 1], radius=int(S * 0.24),
+                                             fill=bg + (255,))
+        if icon_b64:
+            ic = _PILImage.open(_io.BytesIO(base64.b64decode(icon_b64))).convert("RGBA")
+            inner = int(S * 0.74)
+            ic = ic.resize((inner, inner), _PILImage.LANCZOS)
+            off = (S - inner) // 2
+            img.alpha_composite(ic, (off, off))
+        return _png_b64(img.resize((size, size), _PILImage.LANCZOS))
+    except Exception as e:
+        dbg("! reward icon:", e)
+        return None
+
+
+def scale_png_b64(b64, size):
+    """Уменьшает PNG (base64) до size×size с сохранением прозрачности."""
+    if not HAS_PIL or not b64:
+        return None
+    try:
+        ic = _PILImage.open(_io.BytesIO(base64.b64decode(b64))).convert("RGBA")
+        return _png_b64(ic.resize((size, size), _PILImage.LANCZOS))
+    except Exception:
+        return None
+
+
+def draw_points_icon(size, hex_color):
+    """Значок баллов канала по умолчанию: кольцо с точкой (как у Twitch)."""
+    if not HAS_PIL:
+        return None
+    ss = 4
+    S = size * ss
+    col = _hex_to_rgb(hex_color) + (255,)
+    img = _PILImage.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = _PILDraw.Draw(img)
+    lw = max(2, round(S / 9))
+    m = round(S * 0.08)
+    d.ellipse([m, m, S - m, S - m], outline=col, width=lw)
+    r = S * 0.2
+    d.ellipse([S / 2 - r, S / 2 - r, S / 2 + r, S / 2 + r], fill=col)
+    return _png_b64(img.resize((size, size), _PILImage.LANCZOS))
+
+
+def reward_icons(rw):
+    """Дособирает картинки награды (иконка + значок баллов канала) с кэшем."""
+    key = rw["key"]
+    icon = REWARD_ICON_CACHE.get(key, _MISS)
+    if icon is _MISS:
+        raw = fetch_badge_image(rw["icon_url"]) if rw.get("icon_url") else None
+        icon = compose_reward_icon(raw, rw.get("bg") or "#9147ff", 18)
+        REWARD_ICON_CACHE.put(key, icon)
+    rw["icon"] = icon
+    pts = None
+    if rw.get("pts_url"):
+        pkey = "pts:" + rw["pts_url"]
+        pts = REWARD_ICON_CACHE.get(pkey, _MISS)
+        if pts is _MISS:
+            pts = scale_png_b64(fetch_badge_image(rw["pts_url"]), 14)
+            REWARD_ICON_CACHE.put(pkey, pts)
+    rw["pts_b64"] = pts
+    return rw
+
+
 def fetch_7tv_thumb(eid):
     """Статичное PNG-превью смайла 7TV для пикера: маленькое и быстрое,
     через зеркала (у анимированных — первый кадр). base64 или None."""
@@ -1312,12 +1488,15 @@ def helix(method, path, token, client_id, params=None, body=None):
 class IrcThread(threading.Thread):
     """Читает чат каналов (анонимно или с токеном) и кладёт события в очередь."""
 
-    def __init__(self, channels, out_q, badge_maps, seventv_maps, token="", login=""):
+    def __init__(self, channels, out_q, badge_maps, seventv_maps, token="", login="",
+                 reward_maps=None):
         super().__init__(daemon=True)
         self.channels = [c.lower().lstrip("#") for c in channels]
         self.q = out_q
         self.badge_maps = badge_maps      # общие словари, заполняются отдельным потоком
         self.seventv_maps = seventv_maps
+        self.reward_maps = reward_maps if reward_maps is not None else {}
+        self.on_unknown_reward = None     # колбэк(канал): награда с незнакомым id
         self.token = token
         self.login = (login or "").lower()
         self.stop_event = threading.Event()
@@ -1420,12 +1599,37 @@ class IrcThread(threading.Thread):
             if text.startswith("\x01ACTION ") and text.endswith("\x01"):
                 action = True
                 text = text[8:-1]
-            self._prefetch_message(channel, text, tags.get("emotes", ""), tags.get("badges", ""))
+            extra = {}
+            rp_login = tags.get("reply-parent-user-login", "").lower()
+            if rp_login:
+                extra["reply"] = (tags.get("reply-parent-display-name") or rp_login, rp_login,
+                                  tags.get("reply-parent-msg-body", ""))
+            rw = lookup_reward(self.reward_maps, channel, tags.get("custom-reward-id", ""),
+                               tags.get("msg-id", ""))
+            if rw and rw["unknown"] and self.on_unknown_reward:
+                try:
+                    self.on_unknown_reward(channel)
+                except Exception:
+                    pass
+            self._prefetch_message(channel, text, tags.get("emotes", ""), tags.get("badges", ""),
+                                   [rw["icon_url"], rw["pts_url"]] if rw else ())
+            if rw:
+                extra["reward"] = reward_icons(rw)
             segs = self._apply_7tv(self._segments(text, tags.get("emotes", "")), channel)
+            if rp_login and segs and segs[0][0] == "t":
+                # как на сайте: «@ник» в начале ответа не дублируем — он в шапке
+                t0 = segs[0][1]
+                n = len(rp_login) + 1
+                if t0.lower().startswith("@" + rp_login) and (len(t0) == n or t0[n] in " ,:"):
+                    rest = t0[n:].lstrip(" ,:")
+                    if rest:
+                        segs[0] = ("t", rest)
+                    else:
+                        segs.pop(0)
             self.put(("msg", channel, name, tags.get("color", ""), segs, action,
                       resolve_badges(self.badge_maps, channel, tags.get("badges", "")),
                       login.lower(), tags.get("user-id", ""), tags.get("id", ""),
-                      tags.get("reply-parent-user-login", "").lower()))
+                      rp_login, extra))
         elif cmd == "USERSTATE":
             badges = tags.get("badges", "")
             is_mod = tags.get("mod") == "1" or "broadcaster/" in badges
@@ -1461,13 +1665,16 @@ class IrcThread(threading.Thread):
         elif cmd == "RECONNECT":
             raise ConnectionError("сервер запросил переподключение")
 
-    def _prefetch_message(self, channel, text, emotes_tag, badges_tag):
+    def _prefetch_message(self, channel, text, emotes_tag, badges_tag, extra_urls=()):
         """Качает все незнакомые картинки сообщения параллельно (пул из 4 потоков).
 
         Дальше сборка сообщения идёт по тёплому кэшу. Ждём не дольше 2.5 с:
         что не успело — покажется текстом, а в кэш всё равно доедет.
         """
         jobs = []
+        for url in extra_urls or ():
+            if url and url not in BADGE_IMG_CACHE:
+                jobs.append(lambda u=url: fetch_badge_image(u))
         for part in (emotes_tag or "").split("/"):
             eid = re.sub(r"[^A-Za-z0-9_-]", "", part.partition(":")[0])
             if eid and eid not in EMOTE_CACHE:
@@ -1814,6 +2021,8 @@ class OverlayApp:
         self._action_win = None
         self._armed_bans = set()  # «первый клик по ⊘ сделан» (канал/логин)
         self.mod_icons = tk.BooleanVar(value=bool(cfg.get("mod_icons", True)))
+        self.chat_extras = tk.BooleanVar(value=bool(cfg.get("chat_extras", True)))
+        self._rw_refresh_at = {}   # канал -> время последней дозагрузки наград
 
         root.overrideredirect(True)
         root.attributes("-topmost", True)
@@ -1833,6 +2042,7 @@ class OverlayApp:
         self.font_nick = tkfont.Font(family=base_family, size=size, weight="bold")
         self.font_sys = tkfont.Font(family=base_family, size=max(8, size - 2), slant="italic")
         self.font_chip = tkfont.Font(family=base_family, size=max(7, size - 3))
+        self.font_small = tkfont.Font(family=base_family, size=max(8, size - 2))
 
         # --- верхняя полоса ---
         self.bar = tk.Frame(frame, bg=BAR_BG)
@@ -2107,6 +2317,8 @@ class OverlayApp:
                        command=self.toggle_chroma, **chk).pack(side="left")
         tk.Checkbutton(row(), text=T("s_modicons"), variable=self.mod_icons,
                        command=self._save_mod_icons, **chk).pack(side="left")
+        tk.Checkbutton(row(), text=T("s_extras"), variable=self.chat_extras,
+                       command=self._save_chat_extras, **chk).pack(side="left")
 
         # --- вид: светлые слайдеры-пилюли ---
         header("s_appear")
@@ -2294,6 +2506,7 @@ class OverlayApp:
         self.font_nick.configure(size=size)
         self.font_sys.configure(size=max(8, size - 2))
         self.font_chip.configure(size=max(7, size - 3))
+        self.font_small.configure(size=max(8, size - 2))
         self._build_icon_photos()  # иконки перерисовываем под новый кегль
         self._sync_announce_icon()
         try:
@@ -2374,6 +2587,8 @@ class OverlayApp:
             w.tag_configure("sys", foreground=SYS_FG)
             w.tag_configure("msg", foreground=FG)
             w.tag_configure("chip", foreground=CHIP_FG)
+            w.tag_configure("hdr", foreground=SYS_FG)
+            w.tag_configure("reward", background=REWARD_BG)
             w.tag_configure("mention", background=MENTION_BG)
         self.tab_bar.configure(bg=BAR_BG)
         for b in self.tab_bar.winfo_children():
@@ -2700,6 +2915,21 @@ class OverlayApp:
         elif not live and len(chans) > 1:
             self.sys_message(T("live_none"))
 
+    def _refresh_rewards(self, channel):
+        """Пришла награда с незнакомым id (стример только что добавил) —
+        дозагружаем список наград канала, не чаще раза в 2 минуты."""
+        now = time.time()
+        if now - self._rw_refresh_at.get(channel, 0) < 120:
+            return
+        self._rw_refresh_at[channel] = now
+        irc = self.irc
+
+        def run():
+            maps = fetch_reward_maps([channel])
+            if maps and irc is not None:
+                irc.reward_maps.update(maps)
+        DOWNLOAD_POOL.submit(run)
+
     def _refresh_live(self):
         """Фоново обновить список каналов в эфире; результат заберёт poll_queue."""
         chans = list(self.cfg.get("channels") or [])
@@ -2984,6 +3214,10 @@ class OverlayApp:
         for w in self.texts.values():
             w.configure(bg=color)
         self.grip.configure(bg=color)
+
+    def _save_chat_extras(self):
+        self.cfg["chat_extras"] = bool(self.chat_extras.get())
+        save_config(self.cfg)
 
     def _save_mod_icons(self):
         self.cfg["mod_icons"] = bool(self.mod_icons.get())
@@ -3270,9 +3504,12 @@ class OverlayApp:
         # (новые смайлы стримера появятся без переподключения)
         badge_maps = {}
         seventv_maps = {}
+        reward_maps = {}
         self.irc = IrcThread(channels, self.q, badge_maps, seventv_maps,
                              token=self.cfg.get("token", ""),
-                             login=self.cfg.get("login", ""))
+                             login=self.cfg.get("login", ""),
+                             reward_maps=reward_maps)
+        self.irc.on_unknown_reward = self._refresh_rewards
         stop_event = self.irc.stop_event
         irc_ref = self.irc
 
@@ -3293,6 +3530,7 @@ class OverlayApp:
                     badge_maps.update(bm)
                     badge_maps["_ready"] = True
                     seventv_maps.update(fetch_7tv_maps(channels, ids))
+                    reward_maps.update(fetch_reward_maps(channels))
                     if len(channels) > 1:
                         live = fetch_live_set(channels)
                         if live is not None:
@@ -3556,6 +3794,8 @@ class OverlayApp:
         w.tag_configure("sys", foreground=SYS_FG, font=self.font_sys)
         w.tag_configure("msg", foreground=FG, font=self.font_msg)
         w.tag_configure("chip", foreground=CHIP_FG, font=self.font_chip)
+        w.tag_configure("hdr", foreground=SYS_FG, font=self.font_small)
+        w.tag_configure("reward", background=REWARD_BG)   # ниже «mention»: упоминание важнее
         w.tag_configure("mention", background=MENTION_BG)
         w.tag_configure("atbold", font=self.font_nick)
         w.tag_bind("nicklink", "<Enter>", lambda e, t=w: t.configure(cursor="hand2"))
@@ -3742,9 +3982,15 @@ class OverlayApp:
         self._icon_hot = {}    # kind -> PhotoImage (при наведении)
         self._icon_to_hot = {} # имя photo -> hover-photo (для смены на лету)
         self._icon_to_norm = {}
+        self._pts_photo = None # значок баллов канала по умолчанию (шапка награды)
         if not HAS_PIL:
             return
         size = max(14, int(self.cfg.get("font_size", 11) * 1.5))
+        try:
+            self._pts_photo = tk.PhotoImage(data=draw_points_icon(
+                max(11, int(self.cfg.get("font_size", 11) * 1.1)), SYS_FG))
+        except Exception:
+            self._pts_photo = None
         for kind, hot_color in (("ban", "#ff6b6b"), ("timeout", FG),
                                 ("warn", "#ffcf5c"), ("delete", FG),
                                 ("announce", ACCENT), ("emote", ACCENT)):
@@ -3974,6 +4220,14 @@ class OverlayApp:
         login = item[7] if len(item) > 7 else ""
         uid = item[8] if len(item) > 8 else ""
         mid = item[9] if len(item) > 9 else ""
+        extra = item[11] if len(item) > 11 and isinstance(item[11], dict) else {}
+        rw = extra.get("reward") if self.chat_extras.get() else None
+        rp = extra.get("reply") if self.chat_extras.get() else None
+        block_start = int(w.index("end-1c").split(".")[0])
+        if rw:
+            self._insert_reward_header(w, channel, name, rw)
+        if rp:
+            self._insert_reply_header(w, rp)
         line_no = int(w.index("end-1c").split(".")[0])
         multi = len(self.cfg.get("channels") or []) > 1
         if multi and channel and w is self.texts.get("*"):
@@ -4008,7 +4262,44 @@ class OverlayApp:
                     w.insert("end", alt, body_tag)
         w.insert("end", "\n")
         if mention_hit:
-            w.tag_add("mention", "%d.0" % line_no, "%d.end" % line_no)
+            w.tag_add("mention", "%d.0" % (block_start if rp else line_no), "%d.end" % line_no)
+        if rw:
+            w.tag_add("mention" if rw.get("highlight") else "reward",
+                      "%d.0" % block_start, "%d.end" % line_no)
+
+    def _insert_reply_header(self, w, rp):
+        """Строка над ответом, как на Twitch: «Ответ @ник: исходное сообщение»."""
+        pname, plogin, pbody = rp
+        body = re.sub(r"\s+", " ", pbody or "").strip()
+        if len(body) > 90:
+            body = body[:89] + "…"
+        w.insert("end", "↩ " + T("hdr_reply"), "hdr")
+        utag = self.user_tag(w, plogin)
+        w.insert("end", "@" + pname, ("hdr", "nicklink") + ((utag,) if utag else ()))
+        w.insert("end", (": " + body if body else "") + "\n", "hdr")
+
+    def _insert_reward_header(self, w, channel, name, rw):
+        """Строка над сообщением-наградой: иконка, «ник забирает награду «…»», цена."""
+        if rw.get("icon"):
+            img = self.cached_image(rw["key"], rw["icon"])
+            if img is not None:
+                w.image_create("end", image=img, padx=2)
+        if rw.get("title"):
+            w.insert("end", T("rw_line", name, rw["title"]), "hdr")
+        else:
+            w.insert("end", T("rw_generic", name), "hdr")
+        cost = rw.get("cost")
+        if cost:
+            w.insert("end", " · ", "hdr")
+            pts = None
+            if rw.get("pts_b64"):
+                pts = self.cached_image("pts:" + channel, rw["pts_b64"])
+            if pts is None:
+                pts = self._pts_photo
+            if pts is not None:
+                w.image_create("end", image=pts, padx=1)
+            w.insert("end", "{:,}".format(int(cost)).replace(",", " "), "hdr")
+        w.insert("end", "\n")
 
     def quit(self):
         self.save_geometry()
