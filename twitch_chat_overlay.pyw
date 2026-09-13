@@ -4829,7 +4829,9 @@ def download_update(release):
     dest = SELF_PATH + ".new"
     expected = None
     if IS_FROZEN:
-        name = os.path.basename(SELF_PATH)
+        # имя ассета фиксированное: локальный файл может зваться «TwitchChatOverlay (3).exe»
+        # после повторных скачиваний браузером — он останется под своим именем
+        name = "TwitchChatOverlay.exe"
         asset = release["assets"].get(name)
         if not asset:
             raise RuntimeError("в релизе нет " + name)
