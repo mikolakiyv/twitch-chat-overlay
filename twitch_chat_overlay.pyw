@@ -56,7 +56,7 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "overlay_config.json")
-APP_VERSION = "1.17.1"
+APP_VERSION = "1.17.2"
 GITHUB_REPO = "mikolakiyv/twitch-chat-overlay"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 # файл самой программы: exe или .pyw — обновление подменяет именно его
@@ -1664,6 +1664,10 @@ class IrcThread(threading.Thread):
                                   tags.get("reply-parent-msg-body", ""))
             if tags.get("first-msg") == "1":
                 extra["first"] = True
+            if tags.get("source-room-id"):   # Shared Chat: копия одного сообщения в каждом канале
+                extra["room"] = tags.get("room-id", "")
+                extra["src_room"] = tags.get("source-room-id", "")
+                extra["src_id"] = tags.get("source-id", "")
             rw = lookup_reward(self.reward_maps, channel, tags.get("custom-reward-id", ""),
                                tags.get("msg-id", ""))
             if rw and rw["unknown"] and self.on_unknown_reward:
@@ -2082,6 +2086,7 @@ class OverlayApp:
         self._upd_last = None
         self._upd_btn_shown = False
         self.root.after(20000, self._periodic_update_check)
+        self._shared_seen = LruDict(600)   # source-id сообщений Shared Chat, уже показанных в «Все»
 
         root.overrideredirect(True)
         root.attributes("-topmost", True)
@@ -3920,7 +3925,7 @@ class OverlayApp:
         changed = False
         for key, w in list(self.texts.items()):
             if key == "*":
-                sel = flagged
+                sel = [(it, hit) for it, hit in flagged if not self._is_shared_dup(it)]
             else:
                 sel = [(it, hit) for it, hit in flagged
                        if it[0] == "sys" or (it[0] == "msg" and it[1] == key)]
@@ -3940,6 +3945,27 @@ class OverlayApp:
             self._style_tabs()
         if mention_any:
             self.flash_bar()
+
+    def _is_shared_dup(self, item):
+        """Shared Chat (совместный стрим): Twitch присылает одно сообщение в каждый
+        канал-участник. В общей ленте показываем одну копию — из канала-источника,
+        если он подключён; иначе первую пришедшую. Во вкладках каналов не трогаем."""
+        if item[0] != "msg" or len(item) <= 11 or not isinstance(item[11], dict):
+            return False
+        ex = item[11]
+        src, room = ex.get("src_room"), ex.get("room")
+        if not src or src == room:
+            return False                       # оригинал (или не Shared Chat)
+        ids = set((self.irc.channel_ids or {}).values()) if self.irc else set()
+        if src in ids:
+            return True                        # оригинал придёт из своего канала
+        sid = ex.get("src_id")
+        if not sid:
+            return False
+        if self._shared_seen.get(sid) is not None:
+            return True
+        self._shared_seen.put(sid, True)
+        return False
 
     def _render_into(self, w, flagged):
         """Пачка сообщений в одну ленту за одно переключение state."""
