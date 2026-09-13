@@ -56,7 +56,7 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "overlay_config.json")
-APP_VERSION = "1.18.0"
+APP_VERSION = "1.18.1"
 GITHUB_REPO = "mikolakiyv/twitch-chat-overlay"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 # файл самой программы: exe или .pyw — обновление подменяет именно его
@@ -1227,7 +1227,7 @@ def fetch_7tv_image(eid):
 AVATAR_CACHE = LruDict(120)   # url|size -> круглая аватарка канала (base64 PNG) или None
 
 
-def fetch_avatars_by_id(ids):
+def fetch_avatars_by_id(ids, timeout=10):
     """{twitch_id: (login, url аватарки)} — для каналов совместного чата, которые не подключены."""
     out = {}
     try:
@@ -1238,7 +1238,7 @@ def fetch_avatars_by_id(ids):
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0",
         })
-        with urllib.request.urlopen(req, timeout=10, context=SSL_CTX) as r:
+        with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as r:
             data = json.loads(r.read().decode("utf-8"))
         for u in (data.get("data") or {}).get("users") or []:
             if u and u.get("id") and u.get("profileImageURL"):
@@ -1615,6 +1615,7 @@ class IrcThread(threading.Thread):
         self.reward_maps = reward_maps if reward_maps is not None else {}
         self.on_unknown_reward = None     # колбэк(канал): награда с незнакомым id
         self.on_unknown_avatar = None     # колбэк(twitch_id): источник совместного чата без аватарки
+        self._av_asked = set()            # id источников, чью аватарку уже спрашивали синхронно
         self.token = token
         self.login = (login or "").lower()
         self.stop_event = threading.Event()
@@ -1735,12 +1736,22 @@ class IrcThread(threading.Thread):
                     self.on_unknown_reward(channel)
                 except Exception:
                     pass
-            # иконки каналов: своя — для общей ленты, источника — для совместного чата
+            # иконки каналов: своя — для общей ленты; в совместном чате — у каждого
+            # сообщения иконка канала-источника (у своих тоже, чтобы ряд был ровным)
             av_url = (self.badge_maps.get("_avatars") or {}).get(channel)
             src_url = None
             src_room = extra.get("src_room")
-            if src_room and src_room != extra.get("room"):
-                src_url = (self.badge_maps.get("_avatar_by_id") or {}).get(src_room)
+            if src_room:
+                by_id = self.badge_maps.setdefault("_avatar_by_id", {})
+                src_url = by_id.get(src_room)
+                if not src_url and src_room == extra.get("room"):
+                    src_url = av_url
+                if not src_url and src_room not in self._av_asked:
+                    # один раз спрашиваем сразу — чтобы иконка была уже у первого сообщения
+                    self._av_asked.add(src_room)
+                    for k, v in fetch_avatars_by_id([src_room], timeout=3).items():
+                        by_id[k] = v[1]
+                    src_url = by_id.get(src_room)
                 if not src_url and self.on_unknown_avatar:
                     try:
                         self.on_unknown_avatar(src_room)
@@ -3816,8 +3827,13 @@ class OverlayApp:
                 try:
                     bm, ids = fetch_badge_maps(channels)
                     irc_ref.channel_ids.update(ids)
+                    by_id_old = dict(badge_maps.get("_avatar_by_id") or {})
                     badge_maps.pop("_memo", None)
                     badge_maps.update(bm)
+                    # аватарки неподключённых источников совместного чата не теряем
+                    merged = badge_maps.setdefault("_avatar_by_id", {})
+                    for k, v in by_id_old.items():
+                        merged.setdefault(k, v)
                     badge_maps["_ready"] = True
                     seventv_maps.update(fetch_7tv_maps(channels, ids))
                     reward_maps.update(fetch_reward_maps(channels))
