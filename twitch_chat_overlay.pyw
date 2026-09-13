@@ -56,7 +56,7 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "overlay_config.json")
-APP_VERSION = "1.17.0"
+APP_VERSION = "1.17.1"
 GITHUB_REPO = "mikolakiyv/twitch-chat-overlay"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 # файл самой программы: exe или .pyw — обновление подменяет именно его
@@ -1676,16 +1676,6 @@ class IrcThread(threading.Thread):
             if rw:
                 extra["reward"] = reward_icons(rw)
             segs = self._apply_7tv(self._segments(text, tags.get("emotes", "")), channel)
-            if rp_login and segs and segs[0][0] == "t":
-                # как на сайте: «@ник» в начале ответа не дублируем — он в шапке
-                t0 = segs[0][1]
-                n = len(rp_login) + 1
-                if t0.lower().startswith("@" + rp_login) and (len(t0) == n or t0[n] in " ,:"):
-                    rest = t0[n:].lstrip(" ,:")
-                    if rest:
-                        segs[0] = ("t", rest)
-                    else:
-                        segs.pop(0)
             self.put(("msg", channel, name, tags.get("color", ""), segs, action,
                       resolve_badges(self.badge_maps, channel, tags.get("badges", "")),
                       login.lower(), tags.get("user-id", ""), tags.get("id", ""),
@@ -2112,6 +2102,7 @@ class OverlayApp:
         self.font_sys = tkfont.Font(family=base_family, size=max(8, size - 2), slant="italic")
         self.font_chip = tkfont.Font(family=base_family, size=max(7, size - 3))
         self.font_small = tkfont.Font(family=base_family, size=max(8, size - 2))
+        self.font_small_b = tkfont.Font(family=base_family, size=max(8, size - 2), weight="bold")
         self.font_tag = tkfont.Font(family=base_family, size=max(7, size - 4), weight="bold")
 
         # --- верхняя полоса ---
@@ -2588,6 +2579,7 @@ class OverlayApp:
         self.font_sys.configure(size=max(8, size - 2))
         self.font_chip.configure(size=max(7, size - 3))
         self.font_small.configure(size=max(8, size - 2))
+        self.font_small_b.configure(size=max(8, size - 2))
         self.font_tag.configure(size=max(7, size - 4))
         self._build_icon_photos()  # иконки перерисовываем под новый кегль
         self._sync_announce_icon()
@@ -2670,6 +2662,7 @@ class OverlayApp:
             w.tag_configure("msg", foreground=FG)
             w.tag_configure("chip", foreground=CHIP_FG)
             w.tag_configure("hdr", foreground=SYS_FG)
+            w.tag_configure("hdrnick", foreground=FG)
             w.tag_configure("first", background=FIRST_BG, lmargincolor=FIRST_FG)
             w.tag_configure("firstlbl", foreground=FIRST_FG)
             w.tag_configure("reward", background=REWARD_BG)
@@ -3992,6 +3985,7 @@ class OverlayApp:
         w.tag_configure("msg", foreground=FG, font=self.font_msg)
         w.tag_configure("chip", foreground=CHIP_FG, font=self.font_chip)
         w.tag_configure("hdr", foreground=SYS_FG, font=self.font_small)
+        w.tag_configure("hdrnick", foreground=FG, font=self.font_small_b)  # кому отвечают
         # первое сообщение в чате — как в 7TV: розовая кромка слева, подложка и метка справа
         w.tag_configure("first", background=FIRST_BG, lmargin1=4, lmargin2=4,
                         lmargincolor=FIRST_FG)
@@ -4535,7 +4529,7 @@ class OverlayApp:
             body = body[:89] + "…"
         w.insert("end", "↩ " + T("hdr_reply"), "hdr")
         utag = self.user_tag(w, plogin)
-        w.insert("end", "@" + pname, ("hdr", "nicklink") + ((utag,) if utag else ()))
+        w.insert("end", "@" + pname, ("hdr", "hdrnick", "nicklink") + ((utag,) if utag else ()))
         w.insert("end", (": " + body if body else "") + "\n", "hdr")
 
     def _insert_reward_header(self, w, channel, name, rw):
