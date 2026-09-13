@@ -56,7 +56,7 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "overlay_config.json")
-APP_VERSION = "1.17.2"
+APP_VERSION = "1.18.0"
 GITHUB_REPO = "mikolakiyv/twitch-chat-overlay"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 # файл самой программы: exe или .pyw — обновление подменяет именно его
@@ -237,6 +237,7 @@ DEFAULTS = {
     "mod_icons": True,
     "chat_extras": True,
     "auto_update": True,
+    "chan_avatars": True,
     "key_clickthrough": {"vk": 119, "name": "F8"},
     "key_frameless": {"vk": 120, "name": "F9"},
     "key_expand": {"vk": 121, "name": "F10"},
@@ -310,6 +311,7 @@ STRINGS = {
         "s_extras": "Ответы, награды, первые сообщения",
         "first_msg": "ПЕРВОЕ СООБЩЕНИЕ",
         "s_autoupd": "Автообновление (скачивать новые версии в фоне)",
+        "s_avatars": "Иконки каналов в ленте (как в Twitch)",
         "upd_check": "Проверить обновления",
         "upd_avail": "Доступна версия %s — нажмите ⟳ в шапке, чтобы обновиться",
         "upd_downloading": "Скачиваю обновление %s…",
@@ -474,6 +476,7 @@ STRINGS = {
         "s_extras": "Replies, rewards, first messages",
         "first_msg": "FIRST MESSAGE",
         "s_autoupd": "Auto-update (download new versions in background)",
+        "s_avatars": "Channel avatars in the feed (like Twitch)",
         "upd_check": "Check for updates",
         "upd_avail": "Version %s is available — click ⟳ in the title bar to update",
         "upd_downloading": "Downloading update %s…",
@@ -992,7 +995,8 @@ def fetch_badge_maps(channels):
         maps["global"][key] = "https://static-cdn.jtvnw.net/badges/v1/%s/1" % uid
     try:
         q = ("query($logins: [String!]!){ badges { setID version imageURL(size: NORMAL) } "
-             "users(logins: $logins) { id login broadcastBadges { setID version imageURL(size: NORMAL) } } }")
+             "users(logins: $logins) { id login profileImageURL(width: 28) "
+             "broadcastBadges { setID version imageURL(size: NORMAL) } } }")
         body = json.dumps({"query": q, "variables": {"logins": list(channels)}}).encode("utf-8")
         req = urllib.request.Request(GQL_URL, data=body, headers={
             "Client-ID": GQL_CLIENT_ID,
@@ -1010,6 +1014,10 @@ def fetch_badge_maps(channels):
                 continue
             if u.get("id"):
                 ids[u["login"].lower()] = str(u["id"])
+            if u.get("profileImageURL"):   # аватарки — для иконок каналов в ленте
+                maps.setdefault("_avatars", {})[u["login"].lower()] = u["profileImageURL"]
+                if u.get("id"):
+                    maps.setdefault("_avatar_by_id", {})[str(u["id"])] = u["profileImageURL"]
             cm = {}
             for b in (u.get("broadcastBadges") or []):
                 if b and b.get("setID") and b.get("imageURL"):
@@ -1214,6 +1222,57 @@ def fetch_7tv_image(eid):
             break
     SEVENTV_IMG_CACHE.put(eid, data)
     return data
+
+
+AVATAR_CACHE = LruDict(120)   # url|size -> круглая аватарка канала (base64 PNG) или None
+
+
+def fetch_avatars_by_id(ids):
+    """{twitch_id: (login, url аватарки)} — для каналов совместного чата, которые не подключены."""
+    out = {}
+    try:
+        q = "query($ids:[ID!]!){ users(ids:$ids){ id login profileImageURL(width: 28) } }"
+        body = json.dumps({"query": q, "variables": {"ids": [str(i) for i in ids][:20]}}).encode("utf-8")
+        req = urllib.request.Request(GQL_URL, data=body, headers={
+            "Client-ID": GQL_CLIENT_ID,
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0",
+        })
+        with urllib.request.urlopen(req, timeout=10, context=SSL_CTX) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        for u in (data.get("data") or {}).get("users") or []:
+            if u and u.get("id") and u.get("profileImageURL"):
+                out[str(u["id"])] = ((u.get("login") or "").lower(), u["profileImageURL"])
+    except Exception as e:
+        dbg("! avatars:", e)
+    return out
+
+
+def round_avatar(b64, size=18):
+    """Аватарка кружком, как у Twitch в совместном чате."""
+    if not HAS_PIL or not b64:
+        return None
+    try:
+        S = size * 4
+        im = _PILImage.open(_io.BytesIO(base64.b64decode(b64))).convert("RGBA").resize(
+            (S, S), _PILImage.LANCZOS)
+        mask = _PILImage.new("L", (S, S), 0)
+        _PILDraw.Draw(mask).ellipse([0, 0, S - 1, S - 1], fill=255)
+        im.putalpha(mask)
+        return _png_b64(im.resize((size, size), _PILImage.LANCZOS))
+    except Exception as e:
+        dbg("! avatar:", e)
+        return None
+
+
+def avatar_icon(url, size=18):
+    key = "%s|%d" % (url, size)
+    got = AVATAR_CACHE.get(key, _MISS)
+    if got is not _MISS:
+        return got
+    icon = round_avatar(fetch_badge_image(url), size)
+    AVATAR_CACHE.put(key, icon)
+    return icon
 
 
 def fetch_live_set(channels):
@@ -1555,6 +1614,7 @@ class IrcThread(threading.Thread):
         self.seventv_maps = seventv_maps
         self.reward_maps = reward_maps if reward_maps is not None else {}
         self.on_unknown_reward = None     # колбэк(канал): награда с незнакомым id
+        self.on_unknown_avatar = None     # колбэк(twitch_id): источник совместного чата без аватарки
         self.token = token
         self.login = (login or "").lower()
         self.stop_event = threading.Event()
@@ -1675,10 +1735,25 @@ class IrcThread(threading.Thread):
                     self.on_unknown_reward(channel)
                 except Exception:
                     pass
-            self._prefetch_message(channel, text, tags.get("emotes", ""), tags.get("badges", ""),
-                                   [rw["icon_url"], rw["pts_url"]] if rw else ())
+            # иконки каналов: своя — для общей ленты, источника — для совместного чата
+            av_url = (self.badge_maps.get("_avatars") or {}).get(channel)
+            src_url = None
+            src_room = extra.get("src_room")
+            if src_room and src_room != extra.get("room"):
+                src_url = (self.badge_maps.get("_avatar_by_id") or {}).get(src_room)
+                if not src_url and self.on_unknown_avatar:
+                    try:
+                        self.on_unknown_avatar(src_room)
+                    except Exception:
+                        pass
+            urls = ([rw["icon_url"], rw["pts_url"]] if rw else []) + [av_url, src_url]
+            self._prefetch_message(channel, text, tags.get("emotes", ""), tags.get("badges", ""), urls)
             if rw:
                 extra["reward"] = reward_icons(rw)
+            if av_url:
+                extra["av"] = avatar_icon(av_url)
+            if src_url:
+                extra["src_av"] = avatar_icon(src_url)
             segs = self._apply_7tv(self._segments(text, tags.get("emotes", "")), channel)
             self.put(("msg", channel, name, tags.get("color", ""), segs, action,
                       resolve_badges(self.badge_maps, channel, tags.get("badges", "")),
@@ -2078,6 +2153,8 @@ class OverlayApp:
         self.chat_extras = tk.BooleanVar(value=bool(cfg.get("chat_extras", True)))
         self._rw_refresh_at = {}   # канал -> время последней дозагрузки наград
         self.auto_update = tk.BooleanVar(value=bool(cfg.get("auto_update", True)))
+        self.chan_avatars = tk.BooleanVar(value=bool(cfg.get("chan_avatars", True)))
+        self._av_fetching = set()   # twitch-id источников совместного чата, чьи аватарки уже запрошены
         # автообновление: idle → available → downloading → ready | failed
         self._upd = {"state": "idle", "rel": None, "tag": "", "path": None, "err": "",
                      "apply": False}
@@ -2392,6 +2469,8 @@ class OverlayApp:
                        command=self._save_chat_extras, **chk).pack(side="left")
         tk.Checkbutton(row(), text=T("s_autoupd"), variable=self.auto_update,
                        command=self._save_auto_update, **chk).pack(side="left")
+        tk.Checkbutton(row(), text=T("s_avatars"), variable=self.chan_avatars,
+                       command=self._save_chan_avatars, **chk).pack(side="left")
 
         # --- вид: светлые слайдеры-пилюли ---
         header("s_appear")
@@ -3305,6 +3384,24 @@ class OverlayApp:
         self.cfg["auto_update"] = bool(self.auto_update.get())
         save_config(self.cfg)
 
+    def _save_chan_avatars(self):
+        self.cfg["chan_avatars"] = bool(self.chan_avatars.get())
+        save_config(self.cfg)
+
+    def _fetch_avatar_by_id(self, tid):
+        """Совместный чат с неподключённым каналом: узнаём его аватарку по id (один раз)."""
+        if tid in self._av_fetching:
+            return
+        self._av_fetching.add(tid)
+        irc = self.irc
+
+        def run():
+            got = fetch_avatars_by_id([tid])
+            if got and irc is not None:
+                irc.badge_maps.setdefault("_avatar_by_id", {}).update(
+                    {k: v[1] for k, v in got.items()})
+        DOWNLOAD_POOL.submit(run)
+
     # ---- автообновление ----
     def _periodic_update_check(self):
         self.check_updates()
@@ -3702,6 +3799,7 @@ class OverlayApp:
                              login=self.cfg.get("login", ""),
                              reward_maps=reward_maps)
         self.irc.on_unknown_reward = self._refresh_rewards
+        self.irc.on_unknown_avatar = self._fetch_avatar_by_id
         stop_event = self.irc.stop_event
         irc_ref = self.irc
 
@@ -4508,8 +4606,21 @@ class OverlayApp:
         if pad:
             w.insert("end", pad, "msg")
         multi = len(self.cfg.get("channels") or []) > 1
+        use_av = self.chan_avatars.get()
+        # сообщение пришло из другого канала совместного чата — показываем его аватарку
+        src_av = extra.get("src_av") if use_av else None
         if multi and channel and w is self.texts.get("*"):
-            w.insert("end", "#%s " % channel, "chip")
+            av = src_av or (extra.get("av") if use_av else None)
+            key = "av:s:" + extra.get("src_room", "") if src_av else "av:" + channel
+            img = self.cached_image(key, av) if av else None
+            if img is not None:
+                w.image_create("end", image=img, padx=3)
+            else:
+                w.insert("end", "#%s " % channel, "chip")
+        elif src_av:
+            img = self.cached_image("av:s:" + extra.get("src_room", ""), src_av)
+            if img is not None:
+                w.image_create("end", image=img, padx=3)
         for bkey, b64 in badges:
             bimg = self.cached_image("b:" + bkey, b64)
             if bimg is not None:
