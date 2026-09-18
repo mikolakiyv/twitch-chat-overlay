@@ -56,7 +56,7 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "overlay_config.json")
-APP_VERSION = "1.18.1"
+APP_VERSION = "1.18.2"
 GITHUB_REPO = "mikolakiyv/twitch-chat-overlay"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 # файл самой программы: exe или .pyw — обновление подменяет именно его
@@ -206,7 +206,11 @@ def dwm_round(widget, small=False):
 
 apply_palette("twitch")
 
-CHROMA_KEY = "#ff00ff"  # пурпурный фон для захвата окна в OBS (фильтр «Цветовой ключ»)
+# Фон для захвата окна в OBS (фильтр «Цветовой ключ», свой цвет). Намеренно почти
+# чёрный, а не пурпурный: буквы сглаживаются по фону, и с ярким ключом ~40% пикселей
+# текста остаются цветной каймой, которую ключ не вырезает; с тёмным кайма выглядит
+# как тонкая обводка. Чистый чёрный (#000000) в смайлах при сходстве 10 не задевается.
+CHROMA_KEY = "#0b0b10"
 
 # единый TLS-контекст с проверкой сертификатов на все сетевые запросы —
 # делаем верификацию явной и одинаковой везде (а не полагаемся на умолчание)
@@ -340,8 +344,9 @@ STRINGS = {
                           "banned_users, chat_messages и warnings."),
         "mod_err_notmod": "Не получилось: похоже, у вас нет модерки на #%s.",
         "mod_err": "Модерация: ошибка %s",
-        "chroma_on": ("Фон для захвата окна стал пурпурным. В OBS: правый клик по источнику → "
-                      "«Фильтры» → «Цветовой ключ», цвет — пурпурный. На вашем экране всё как раньше."),
+        "chroma_on": ("Хромакей для OBS включён. В OBS: правый клик по источнику → «Фильтры» → "
+                      "«Цветовой ключ» → тип цвета «Свой цвет» #0b0b10, сходство 10, сглаживание 5. "
+                      "На вашем экране всё как раньше."),
         "chroma_off": "Хромакей для OBS выключен.",
         "pil_off": "Смайлы 7TV выключены: нет пакета Pillow. Запустите через батник — установит сам.",
         "connecting": "Подключение к Twitch…",
@@ -505,8 +510,9 @@ STRINGS = {
                           "banned_users, chat_messages and warnings."),
         "mod_err_notmod": "Failed: you don't seem to be a moderator on #%s.",
         "mod_err": "Moderation: error %s",
-        "chroma_on": ("Window-capture background is now magenta. In OBS: right-click the source → "
-                      "Filters → Color Key, key color magenta. Your own screen is unchanged."),
+        "chroma_on": ("OBS chroma key is on. In OBS: right-click the source → Filters → Color Key → "
+                      "key color type Custom #0b0b10, similarity 10, smoothness 5. "
+                      "Your own screen is unchanged."),
         "chroma_off": "OBS chroma key is off.",
         "pil_off": "7TV emotes disabled: Pillow package missing. Run the .bat — it installs it.",
         "connecting": "Connecting to Twitch…",
@@ -3345,9 +3351,9 @@ class OverlayApp:
 
     def apply_look(self):
         self.cfg["ghost"] = bool(self.ghost.get())
-        # Обычный ключ прозрачности — цвет фона. Для OBS-режима фон красится
-        # чисто-пурпурным: на мониторе он так же вырезается, а «Захват окна»
-        # в OBS видит пурпур, который убирается фильтром «Цветовой ключ».
+        # Обычный ключ прозрачности — цвет фона темы. Для OBS-режима фон красится
+        # фиксированным CHROMA_KEY: на мониторе он так же вырезается, а «Захват окна»
+        # в OBS видит этот цвет, и его убирает фильтр «Цветовой ключ».
         key = CHROMA_KEY if self.obs_chroma.get() else BG
         try:
             if self.ghost.get():
