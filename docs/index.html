@@ -7,7 +7,7 @@
 <meta name="description" content="Лёгкий оверлей чата Twitch для Windows: поверх всех окон, смайлы 7TV с анимацией, вкладки каналов, упоминания. Бесплатно, open source, без установки.">
 <meta property="og:title" content="Twitch Chat Overlay — чат поверх игры">
 <meta property="og:description" content="Смайлы 7TV с анимацией · вкладки каналов · работает в РФ без VPN · бесплатно и open source">
-<meta property="og:image" content="https://mikolakiyv.github.io/twitch-chat-overlay/screenshot_main3.png">
+<meta property="og:image" content="https://mikolakiyv.github.io/twitch-chat-overlay/screenshot_main4.png">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%239147ff'/><rect x='18' y='24' width='64' height='38' rx='10' fill='white'/><path d='M30 58 L52 58 L34 78 Z' fill='white'/><circle cx='35' cy='43' r='4.5' fill='%239147ff'/><circle cx='50' cy='43' r='4.5' fill='%239147ff'/><circle cx='65' cy='43' r='4.5' fill='%239147ff'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -80,21 +80,25 @@
   .ov {
     position: absolute; left: 50%; top: 50%;
     width: 340px; transform: translate(-50%, -50%) rotate(-2.4deg);
-    background: #17171a; border: 1px solid #3a3a41; border-radius: 12px;
+    background: #111317; border: 1px solid #34353f; border-radius: 12px;
     box-shadow: 0 30px 80px rgba(0, 0, 0, .65), 0 0 0 1px rgba(145, 71, 255, .12), 0 0 60px rgba(145, 71, 255, .16);
     font-family: var(--chat); font-size: .84rem; overflow: hidden;
     animation: rise .8s cubic-bezier(.2, .7, .2, 1) both;
   }
   @keyframes rise { from { opacity: 0; transform: translate(-50%, -44%) rotate(-2.4deg); } }
-  .ov-bar { display: flex; align-items: center; background: #1e1e22; padding: 7px 10px; gap: 8px; }
+  .ov-bar { display: flex; align-items: center; background: #1f2029; padding: 7px 10px; gap: 6px; }
+  .ov-bar .live { color: #eb0400; font-size: .6rem; }
+  .ov-bar .meta { color: #8b8a99; font-size: .7rem; white-space: nowrap; }
   .ov-bar b { font-size: .8rem; }
   .ov-bar .sp { flex: 1; }
   .ov-bar i { font-style: normal; color: #cfcfd6; font-size: .78rem; }
   .ov-bar i.h { color: var(--accent-hi); }
-  .ov-tabs { display: flex; gap: 2px; align-items: center; background: #1e1e22; padding: 0 8px 6px; font-size: .74rem; color: #a3a3ab; }
-  .ov-tabs span { padding: 2px 7px; }
-  .ov-tabs .on { color: var(--accent-hi); font-weight: 700; }
-  .ov-tabs .add { margin-left: auto; background: #26262b; border-radius: 99px; padding: 1px 9px; color: #7e7691; font-size: .68rem; }
+  .ov-tabs { display: flex; gap: 3px; align-items: center; background: #0e0e10; padding: 5px 8px; font-size: .74rem; color: #9d9cab; }
+  .ov-tabs span { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 99px; }
+  .ov-tabs .on { background: #29253f; color: #efeff1; font-weight: 700; }
+  .ov-tabs .av { width: 14px; height: 14px; border-radius: 50%; background: linear-gradient(135deg, #ffb86b, #ff5c8a); display: inline-block; }
+  .ov-tabs .av.b { background: linear-gradient(135deg, #5c9dff, #57d964); }
+  .ov-tabs .plus { color: #6e6d78; font-size: .95rem; padding: 0 6px; }
   .ov-feed .hdr { font-size: .7rem; color: #a3a3ab; line-height: 1.35; }
   .ov-feed li.rw { background: #2a2a3d; }
   .ov-feed .rwi { display: inline-block; width: 12px; height: 12px; border-radius: 3px; background: #1f69ff; vertical-align: -2px; margin-right: 4px; }
@@ -110,16 +114,20 @@
   .ov-input .emo::before { content: ""; position: absolute; left: 4px; top: 5px; width: 3px; height: 3px; border-radius: 50%; background: #9a9aa3; box-shadow: 6px 0 0 #9a9aa3; }
   .ov-input .emo::after { content: ""; position: absolute; left: 4px; top: 8px; width: 7px; height: 4px; border: 1.6px solid #9a9aa3; border-top: 0; border-radius: 0 0 8px 8px; }
   .ov-feed { list-style: none; padding: 8px 10px; height: 252px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
-  .ov-feed li { padding: 2.5px 4px; border-radius: 6px; animation: pop .3s ease both; }
-  @keyframes pop { from { opacity: 0; transform: translateY(7px); } }
+  /* новые сообщения въезжают снизу, лента плавно уезжает вверх — как в самом оверлее */
+  .ov-feed li { padding: 3px 4px; border-radius: 4px; overflow: hidden; animation: slidein .45s cubic-bezier(.2, .7, .2, 1) both; }
+  @keyframes slidein { from { max-height: 0; opacity: 0; } to { max-height: 140px; opacity: 1; } }
+  .ov-feed .ts { color: #75747f; margin-right: 5px; font-size: .76rem; }
+  .ov-feed .rp { color: #75747f; }
+  .ov-feed .ln { color: #7aa2e8; }
   .ov-feed .nick { font-weight: 700; }
   .ov-feed img { height: 22px; vertical-align: -6px; }
   .ov-feed img.badge { height: 15px; vertical-align: -2px; margin-right: 4px; }
   .ov-feed .sys { color: #a3a3ab; font-style: italic; font-size: .78rem; }
-  .ov-feed .mn { background: #3d2a66; }
-  .ov-input { display: flex; gap: 6px; align-items: center; background: #1e1e22; padding: 7px 10px; }
+  .ov-feed li.mn { background: #492830; box-shadow: inset 3px 0 0 #d24b5f; padding-left: 9px; border-radius: 0; }
+  .ov-input { display: flex; gap: 6px; align-items: center; background: #1f2029; padding: 7px 10px; }
   .ov-input .chip { background: #2e2e35; border-radius: 99px; padding: 3px 9px; font-size: .72rem; color: #a6a6ae; }
-  .ov-input .field { flex: 1; background: #26262b; border-radius: 99px; padding: 4px 12px; font-size: .76rem; color: #7e7691; }
+  .ov-input .field { flex: 1; background: #26272f; border-radius: 99px; padding: 4px 12px; font-size: .76rem; color: #7e7691; }
 
   /* ── чипсы-факты ───────────────────────────────────── */
   .facts { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; padding: 8px 0 8px; }
@@ -221,15 +229,15 @@
         </a>
         <a class="alt" href="https://github.com/mikolakiyv/twitch-chat-overlay/releases/latest/download/twitch-chat-overlay.zip">версия с исходниками .zip</a>
       </div>
-      <p class="meta"><span id="ver">v1.18.2</span> · 18 МБ · <b>без установки</b> · <b>обновляется сам</b> · Windows 10/11 · rus/eng</p>
+      <p class="meta"><span id="ver">v1.19.0</span> · 18 МБ · <b>без установки</b> · <b>обновляется сам</b> · Windows 10/11 · rus/eng</p>
     </div>
 
     <div class="scene" aria-hidden="true">
       <div class="ov">
-        <div class="ov-bar"><b>#stream +1</b><span class="sp"></span><i class="h">♥</i><i>⚙</i><i>✕</i></div>
-        <div class="ov-tabs"><span class="on">Все</span><span>#stream</span><span>#games <b class="cnt">✱1</b></span><span class="add">＋ ссылка или канал</span></div>
+        <div class="ov-bar"><span class="live">●</span><b>stream</b><span class="meta">3ч 7м · 2 779 · WARDOGS</span><span class="sp"></span><i>—</i><i class="h">♥</i><i>⚙</i><i>✕</i></div>
+        <div class="ov-tabs"><span>Все</span><span class="on"><i class="av"></i>stream</span><span><i class="av b"></i><b class="cnt">✱1</b></span><span class="plus">+</span></div>
         <ul class="ov-feed" id="feed"></ul>
-        <div class="ov-input"><span class="chip">#stream ▾</span><span class="field">Написать в чат…</span><span class="emo"></span></div>
+        <div class="ov-input"><span class="chip">#stream ▾</span><span class="field">Отправить сообщение…</span><span class="emo"></span></div>
       </div>
     </div>
   </header>
@@ -250,7 +258,7 @@
       <div class="f" style="--c:var(--coral)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M5 5h14M12 5v14M8 19h8'/></svg></span><div><b>Только текст — <kbd>F9</kbd></b><p>Остаётся один текст чата. <kbd>Insert</kbd> — текст + поле ввода. <kbd>F8</kbd> — клики сквозь окно.</p></div></div>
       <div class="f" style="--c:var(--accent)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x='3' y='4' width='18' height='16' rx='2'/><path d='M9 4v16M15 4v16'/></svg></span><div><b>Мультичат — <kbd>F10</kbd></b><p>Разворачивается в колонки — только каналы, которые сейчас в эфире (●).</p></div></div>
       <div class="f" style="--c:var(--pink)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx='12' cy='12' r='9'/><path d='M8.5 14s1.3 2 3.5 2 3.5-2 3.5-2M9 9.5h.01M15 9.5h.01'/></svg></span><div><b>Смайлы Twitch и 7TV</b><p>Анимированные двигаются. Пикер с поиском. В РФ работают без VPN.</p></div></div>
-      <div class="f" style="--c:var(--blue)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M21 12a8 8 0 0 1-8 8H8l-5 3 1.5-4.5A8 8 0 1 1 21 12z'/></svg></span><div><b>Как настоящий чат</b><p>Цвета ников, значки, ответы, награды за баллы, первое сообщение — как на сайте и в 7TV.</p></div></div>
+      <div class="f" style="--c:var(--blue)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M21 12a8 8 0 0 1-8 8H8l-5 3 1.5-4.5A8 8 0 1 1 21 12z'/></svg></span><div><b>Как настоящий чат</b><p>Время у сообщений, значки, ответы одной строкой, награды за баллы; вас отметили — строка красная.</p></div></div>
       <div class="f" style="--c:var(--green)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z'/></svg></span><div><b>Отправка и анонсы</b><p>Вошли через Twitch — пишете прямо из оверлея. Мегафон шлёт анонс.</p></div></div>
       <div class="f" style="--c:var(--coral)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z'/></svg></span><div><b>Модерация в ленте</b><p>Бан, таймаут, варн, удалить — кнопки у сообщений там, где вы модер.</p></div></div>
       <div class="f" style="--c:var(--pink)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M12 3l2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9L12 3z'/></svg></span><div><b>Избранное и наборы</b><p>Частые каналы и наборы «вечер», «турниры» подключаются одним кликом.</p></div></div>
@@ -262,14 +270,13 @@
     <h2>Что <em>нового</em></h2>
     <div class="how">
       <ol style="list-style:none; margin-left:0">
+        <li><b>v1.19</b> — вид как у чата Twitch с 7TV: время у сообщений, красные упоминания, ответы одной строкой, плавная прокрутка и пауза, вкладки с аватарками и «+», шапка с эфиром</li>
         <li><b>v1.18.2</b> — хромакей для OBS без фиолетовой каймы на тексте: ключ стал тёмным (#0b0b10, сходство 10, сглаживание 5)</li>
         <li><b>v1.18.1</b> — в совместном чате иконка канала у каждого сообщения, включая свои; автообновление работает и для файла, переименованного браузером («TwitchChatOverlay (2).exe»)</li>
         <li><b>v1.18</b> — иконки каналов в общей ленте и у сообщений совместного чата, как в Twitch</li>
         <li><b>v1.17.2</b> — общая лента не дублирует сообщения совместного чата (Shared Chat)</li>
         <li><b>v1.17.1</b> — в ответах виден «@ник», кому отвечают; ник в шапке ответа заметнее</li>
         <li><b>v1.17</b> — автообновление: новые версии качаются в фоне и ставятся при следующем запуске (или по клику ⟳)</li>
-        <li><b>v1.16</b> — первое сообщение зрителя выделяется как в 7TV (кромка, подложка, метка)</li>
-        <li><b>v1.15</b> — поле «＋ ссылка или канал» над чатом: вставил ссылку — чат открылся</li>
         <li><b>v1.14</b> — ответы «↩ Ответ @ник: …» и награды за баллы канала в ленте</li>
         <li><b>v1.13</b> — F10 открывает только каналы в эфире (●)</li>
         <li><b>v1.12</b> — Insert: прозрачный чат с полем ввода; F9 совсем чистый</li>
@@ -283,7 +290,7 @@
     <h2>Как <em>запустить</em></h2>
     <div class="steps">
       <div class="step"><div class="n">шаг 1</div><p>Скачайте <b>TwitchChatOverlay.exe</b>. Установка не нужна.</p></div>
-      <div class="step"><div class="n">шаг 2</div><p>Запустите и введите канал. Ещё каналы — просто вставьте ссылку в поле над чатом.</p></div>
+      <div class="step"><div class="n">шаг 2</div><p>Запустите и введите канал. Ещё каналы — кнопка «+» над чатом: вставил ссылку, Enter.</p></div>
       <div class="step"><div class="n">шаг 3</div><p>Перетащите куда удобно. Правый клик — настройки.</p></div>
     </div>
     <p class="smart">⚠️ SmartScreen при первом запуске: <b>«Подробнее» → «Выполнить в любом случае»</b>. Код открыт — можно проверить на GitHub. В игре включите режим «оконный без рамки», иначе поверх неё ничего не видно.</p>
@@ -293,17 +300,19 @@
     <h2>Скриншоты</h2>
     <div class="show" id="show">
       <div class="stage">
-        <figure class="sl on" data-cap="Вкладки со счётчиком упоминаний, значки, смайлы и поле «＋ ссылка или канал» над чатом"><img src="screenshot_main3.png" alt="Окно оверлея: вкладки каналов, поле «＋ ссылка или канал», ответ с шапкой как на Twitch, награда за баллы, смайлы"><img class="bg" src="screenshot_main3.png" alt="" aria-hidden="true"></figure>
-        <figure class="sl" data-cap="Шапка «↩ Ответ @ник», ответ вам подсвечен, награда за баллы с иконкой и ценой, первое сообщение — как в 7TV"><img src="screenshot_replies.png" alt="Лента крупно: шапка ответа, подсвеченный ответ, награда за баллы, выделенное и первое сообщение"><img class="bg" src="screenshot_replies.png" alt="" aria-hidden="true"></figure>
-        <figure class="sl" data-cap="F10 открыл колонками только каналы в эфире (●) — четвёртый оффлайн, и колонки у него нет"><img src="screenshot_multichat.png" alt="Развёрнутый мультичат: три колонки живых каналов с метками ●"><img class="bg" src="screenshot_multichat.png" alt="" aria-hidden="true"></figure>
-        <figure class="sl" data-cap="Без рамки и фона — над игрой парит один чат, ответы и награды видны и тут"><img src="screenshot_textonly2.png" alt="Режим «только текст»: чат парит без рамки и фона"><img class="bg" src="screenshot_textonly2.png" alt="" aria-hidden="true"></figure>
-        <figure class="sl" data-cap="Смайлы Twitch и 7TV с поиском и недавними — только те, что работают на выбранном канале"><img src="screenshot_picker.png" alt="Пикер смайлов: поиск и сетка смайлов 7TV канала"><img class="bg" src="screenshot_picker.png" alt="" aria-hidden="true"></figure>
-        <figure class="sl" data-cap="Все настройки на одном экране: каналы, избранное, режимы с клавишами, вид, тема, язык"><img src="settings-panel.png" alt="Панель настроек: слайдеры, переключатели, темы и язык на одном экране"><img class="bg" src="settings-panel.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl on" data-cap="Как чат Twitch: вкладки с аватарками и «+», шапка с эфиром (● 3ч 7м · зрители · игра), время у сообщений"><img src="screenshot_main4.png" alt="Оверлей в стиле чата Twitch: вкладки с аватарками, шапка с эфиром, время сообщений, красное упоминание"><img class="bg" src="screenshot_main4.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl" data-cap="Ответ одной строкой «↩ @ник», вас отметили — красная строка с кромкой; награды за баллы и первое сообщение — как в 7TV"><img src="screenshot_replies2.png" alt="Лента крупно: ответ одной строкой, красное упоминание, награда за баллы, первое сообщение"><img class="bg" src="screenshot_replies2.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl" data-cap="«+» за вкладками: ссылка из буфера обмена уже вставлена — Enter, и чат открыт; избранное — в один клик"><img src="screenshot_add.png" alt="Окно добавления чата: вставленная ссылка на попаут-чат и избранные каналы"><img class="bg" src="screenshot_add.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl" data-cap="F10 — колонками только те, кто в эфире: «в эфире 3 из 4», у оффлайн-канала колонки нет"><img src="screenshot_multichat2.png" alt="Развёрнутый мультичат: три колонки живых каналов"><img class="bg" src="screenshot_multichat2.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl" data-cap="F9 — только текст поверх игры: время, ответы и упоминания видны и тут"><img src="screenshot_textonly3.png" alt="Режим «только текст»: чат парит без рамки и фона"><img class="bg" src="screenshot_textonly3.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl" data-cap="Смайлы Twitch и 7TV с поиском — только те, что работают на выбранном канале"><img src="screenshot_picker2.png" alt="Пикер смайлов: поиск и сетка смайлов 7TV канала"><img class="bg" src="screenshot_picker2.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl" data-cap="Все настройки на одном экране — и время сообщений, и иконки каналов, и автообновление"><img src="settings-panel2.png" alt="Панель настроек на одном экране"><img class="bg" src="settings-panel2.png" alt="" aria-hidden="true"></figure>
       </div>
-      <p class="cap" id="cap">Вкладки со счётчиком упоминаний, значки, смайлы и поле «＋ ссылка или канал» над чатом</p>
+      <p class="cap" id="cap">Как чат Twitch: вкладки с аватарками и «+», шапка с эфиром (● 3ч 7м · зрители · игра), время у сообщений</p>
       <div class="thumbs" role="tablist" aria-label="Скриншоты">
         <button class="th on" type="button" role="tab" aria-selected="true">Обычный режим</button>
-        <button class="th" type="button" role="tab" aria-selected="false">Ответы и награды</button>
+        <button class="th" type="button" role="tab" aria-selected="false">Ответы и упоминания</button>
+        <button class="th" type="button" role="tab" aria-selected="false">Кнопка «+»</button>
         <button class="th" type="button" role="tab" aria-selected="false">Мультичат F10</button>
         <button class="th" type="button" role="tab" aria-selected="false">Только текст F9</button>
         <button class="th" type="button" role="tab" aria-selected="false">Пикер смайлов</button>
@@ -359,13 +368,14 @@
     nick("#ff7f50", "kotleta") + "нажал F9 — остался один текст 👌",
     SUB + nick("#5c9dff", "quiet_boi") + "смайлы 7tv едут без впна " + CLAP,
     "<span class='fl'>ПЕРВОЕ СООБЩЕНИЕ</span>" + nick("#57d964", "a1iveq") + "7 " + PEEPO,
-    "<div class='hdr'>↩ Ответ @quiet_boi: смайлы 7tv едут без впна</div>" + nick("#ff7f50", "kotleta") + "да, через зеркала " + EZ,
+    nick("#ff7f50", "kotleta") + "<span class='rp'>↩</span> <b>@quiet_boi</b> да, через зеркала " + EZ,
     nick("#ff69b4", "dancer") + PARROT + " " + PARROT + " " + PARROT,
-    "<span class='mn'>" + nick("#57d964", "modzilla") + "<b style='color:#a970ff'>@ты</b> глянь, тебя тегнули 💜</span>",
+    "<span class='mn'>" + nick("#ff4b4b", "FlappyGG") + "<b>@ты</b> глянь, тебя отметили — строка красная</span>",
     "<span class='al'>АНОНС</span>" + MOD + nick("#57d964", "modzilla") + "розыгрыш через 5 минут " + PETPET,
     "<span class='sys'>kotleta подписался на 3 месяца!</span>",
-    MODI + VIP + nick("#a970ff", "vip_persona") + "у каждого канала своя вкладка, удобно",
-    "<div class='hdr rw'><span class='rwi'></span>dancer забирает награду «музыка» · <span class='pts'></span>150</div>" + nick("#ff69b4", "dancer") + "youtu.be/bP4piK-uR8k",
+    MODI + VIP + nick("#a970ff", "vip_persona") + "нажал + и вставил ссылку — чат открылся вкладкой",
+    nick("#5c9dff", "quiet_boi") + "прокрутил вверх — чат встал на паузу, удобно",
+    "<div class='hdr rw'><span class='rwi'></span>dancer забирает награду «музыка» · <span class='pts'></span>150</div>" + nick("#ff69b4", "dancer") + "<span class='ln'>youtu.be/bP4piK-uR8k</span>",
     MODI + nick("#5c9dff", "quiet_boi") + "клик по нику открывает профиль " + ALIEN,
     nick("#57d964", "modzilla") + "F10 открыл только тех, кто в эфире <b style='color:#eb0400'>●</b>",
     nick("#ff7f50", "kotleta") + "настройки одним экраном, наконец-то",
@@ -378,6 +388,14 @@
     var li = document.createElement("li");
     var html = POOL[i % POOL.length];
     li.innerHTML = html;
+    // время отправки — перед значками и ником, как в оверлее
+    var anchor = li.querySelector(".mi, img.badge, .nick");
+    if (anchor) {
+      var d = new Date(), t = document.createElement("span");
+      t.className = "ts";
+      t.textContent = d.getHours() + ":" + ("0" + d.getMinutes()).slice(-2);
+      anchor.parentNode.insertBefore(t, anchor);
+    }
     if (html.indexOf("class='mn'") > -1) li.className = "mn";
     if (html.indexOf("class='hdr rw'") > -1) li.className = "rw";
     if (html.indexOf("class='fl'") > -1) li.className = "first";

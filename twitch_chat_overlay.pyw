@@ -18,6 +18,7 @@ by aliveenjoyer (twitch.tv/aliveenjoyer)
 """
 
 import base64
+import calendar
 import ctypes
 import hashlib
 import json
@@ -56,7 +57,7 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "overlay_config.json")
-APP_VERSION = "1.18.2"
+APP_VERSION = "1.19.0"
 GITHUB_REPO = "mikolakiyv/twitch-chat-overlay"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 # файл самой программы: exe или .pyw — обновление подменяет именно его
@@ -69,17 +70,22 @@ PALETTES = {
     "claude": dict(bg="#262624", bar="#1f1e1b", border="#3f3c36", fg="#f0eee6",
                    sys="#9c968b", chip="#a8a29a", accent="#d97757",
                    accent_hover="#e89b7f", accent_active="#b85c3e",
-                   mention="#503527", entry="#30302b", chipbtn="#34332e",
+                   mention="#4a2a27", mention_edge="#e0715f", hl_bg="#3d3326",
+                   entry="#30302b", chipbtn="#34332e",
                    select="#4a4740", grip="#6b665d", btnfg="#cac5bb",
                    slider_track="#cfc8ba", slider_knob="#f6f2e9", reward="#33322c",
-                   first_bg="#3a2a31", first_fg="#e88aa8"),
-    "twitch": dict(bg="#17171a", bar="#1e1e22", border="#3a3a41", fg="#efeff1",
-                   sys="#a3a3ab", chip="#a6a6ae", accent="#9147ff",
+                   first_bg="#3a2a31", first_fg="#e88aa8",
+                   tabbar="#191816", tab_on="#35322d", ts="#85807a", link="#8fb3e6"),
+    # как чат Twitch с 7TV: тёмная лента, бордовые упоминания с кромкой
+    "twitch": dict(bg="#111317", bar="#1f2029", border="#34353f", fg="#efeff1",
+                   sys="#9d9cab", chip="#a6a6ae", accent="#9147ff",
                    accent_hover="#c39cff", accent_active="#772ce8",
-                   mention="#3d2a66", entry="#26262b", chipbtn="#2e2e35",
-                   select="#404049", grip="#63636b", btnfg="#cfcfd6",
-                   slider_track="#c9cbd6", slider_knob="#f4f4f8", reward="#2a2a3d",
-                   first_bg="#2e1e2b", first_fg="#ff6fb4"),
+                   mention="#492830", mention_edge="#d24b5f", hl_bg="#30244f",
+                   entry="#26272f", chipbtn="#2b2c36",
+                   select="#3d3e4c", grip="#5d5e6a", btnfg="#cfcfd6",
+                   slider_track="#c9cbd6", slider_knob="#f4f4f8", reward="#232533",
+                   first_bg="#2e1e2b", first_fg="#ff6fb4",
+                   tabbar="#0e0e10", tab_on="#29253f", ts="#75747f", link="#7aa2e8"),
 }
 
 
@@ -88,8 +94,15 @@ def apply_palette(name):
     global BG, BAR_BG, BORDER, FG, SYS_FG, CHIP_FG, ACCENT, ACCENT_HOVER
     global ACCENT_ACTIVE, MENTION_BG, ENTRY_BG, CHIPBTN_BG, SELECT_BG, GRIP_FG, BTN_FG
     global SLIDER_TRACK, SLIDER_KNOB, REWARD_BG, FIRST_BG, FIRST_FG
+    global MENTION_EDGE, HL_BG, TABBAR_BG, TAB_ON, TS_FG, LINK_FG
     p = PALETTES.get(name) or PALETTES["claude"]
     REWARD_BG = p["reward"]
+    MENTION_EDGE = p["mention_edge"]
+    HL_BG = p["hl_bg"]
+    TABBAR_BG = p["tabbar"]
+    TAB_ON = p["tab_on"]
+    TS_FG = p["ts"]
+    LINK_FG = p["link"]
     FIRST_BG = p["first_bg"]
     FIRST_FG = p["first_fg"]
     BG = p["bg"]
@@ -211,6 +224,7 @@ apply_palette("twitch")
 # текста остаются цветной каймой, которую ключ не вырезает; с тёмным кайма выглядит
 # как тонкая обводка. Чистый чёрный (#000000) в смайлах при сходстве 10 не задевается.
 CHROMA_KEY = "#0b0b10"
+LIVE_RED = "#eb0400"   # точка «в эфире», как у Twitch
 
 # единый TLS-контекст с проверкой сертификатов на все сетевые запросы —
 # делаем верификацию явной и одинаковой везде (а не полагаемся на умолчание)
@@ -242,6 +256,7 @@ DEFAULTS = {
     "chat_extras": True,
     "auto_update": True,
     "chan_avatars": True,
+    "timestamps": True,
     "key_clickthrough": {"vk": 119, "name": "F8"},
     "key_frameless": {"vk": 120, "name": "F9"},
     "key_expand": {"vk": 121, "name": "F10"},
@@ -302,6 +317,18 @@ STRINGS = {
         "mention_saved": "Упоминания: @%s",
         "tab_all": "Все",
         "tab_add_ph": "＋ ссылка или канал",
+        "add_title": "Открыть чат",
+        "add_hint": "Ссылка на канал, попаут или мод-вью — или просто имя. Enter — открыть",
+        "add_favs": "Из избранного:",
+        "tt_add": "Добавить чат по ссылке",
+        "tab_tt": "#%s · средний клик — закрыть вкладку",
+        "s_timestamps": "Время сообщений",
+        "paused": "⏸ Чат на паузе — вниз",
+        "offline": "не в эфире",
+        "all_chats": "Все чаты",
+        "live_of": "в эфире %d из %d",
+        "up_hm": "%dч %dм",
+        "up_m": "%dм",
         "add_bad": "Не понял: нужна ссылка twitch.tv/канал или имя канала",
         "s_anim": "Анимация смайлов",
         "s_chroma": "Хромакей для OBS",
@@ -367,7 +394,7 @@ STRINGS = {
         "mentions_off": "Упоминания выключены",
         "lang_set": "Язык: русский",
         "newmsgs": "↓ новые сообщения (%d)",
-        "placeholder": "Написать в чат…",
+        "placeholder": "Отправить сообщение…",
         "tt_donate": "Поддержать разработчика",
         "tt_menu": "Настройки",
         "tt_close": "Закрыть",
@@ -468,6 +495,18 @@ STRINGS = {
         "mention_saved": "Mentions: @%s",
         "tab_all": "All",
         "tab_add_ph": "＋ link or channel",
+        "add_title": "Open a chat",
+        "add_hint": "Channel, popout or mod-view link — or just a name. Enter to open",
+        "add_favs": "From favorites:",
+        "tt_add": "Add a chat by link",
+        "tab_tt": "#%s · middle-click to close the tab",
+        "s_timestamps": "Message timestamps",
+        "paused": "⏸ Chat paused — back to live",
+        "offline": "offline",
+        "all_chats": "All chats",
+        "live_of": "%d of %d live",
+        "up_hm": "%dh %dm",
+        "up_m": "%dm",
         "add_bad": "Couldn't parse that: paste a twitch.tv/channel link or a channel name",
         "s_anim": "Animated emotes",
         "s_chroma": "OBS chroma key",
@@ -1281,10 +1320,26 @@ def avatar_icon(url, size=18):
     return icon
 
 
-def fetch_live_set(channels):
-    """Кто из каналов сейчас в эфире (GQL, без логина). set логинов или None."""
+def _msg_time(tags):
+    """Когда сообщение отправлено: тег tmi-sent-ts (мс), иначе — сейчас."""
     try:
-        q = "query($logins:[String!]!){users(logins:$logins){login stream{id}}}"
+        v = int(tags.get("tmi-sent-ts") or 0) / 1000.0
+        if v > 0:
+            return v
+    except (TypeError, ValueError):
+        pass
+    return time.time()
+
+
+def fetch_stream_info(channels):
+    """Эфиры каналов одним анонимным GQL-запросом, как в шапке чата Twitch.
+
+    {'live': {логин: {'since': unix-время старта, 'viewers': int, 'game': str}},
+     'names': {логин: имя как на Twitch}} или None, если сеть не ответила.
+    """
+    try:
+        q = ("query($logins:[String!]!){users(logins:$logins){login displayName "
+             "stream{id createdAt viewersCount game{displayName}}}}")
         body = json.dumps({"query": q,
                            "variables": {"logins": list(channels)[:35]}}).encode("utf-8")
         req = urllib.request.Request(GQL_URL, data=body, headers={
@@ -1294,11 +1349,33 @@ def fetch_live_set(channels):
         })
         with urllib.request.urlopen(req, timeout=10, context=SSL_CTX) as r:
             data = json.loads(r.read().decode("utf-8"))
-        return {u["login"].lower() for u in (data.get("data") or {}).get("users") or []
-                if u and u.get("login") and u.get("stream")}
+        live, names = {}, {}
+        for u in (data.get("data") or {}).get("users") or []:
+            if not u or not u.get("login"):
+                continue
+            login = u["login"].lower()
+            if u.get("displayName"):
+                names[login] = u["displayName"]
+            st = u.get("stream")
+            if not st:
+                continue
+            try:
+                since = calendar.timegm(time.strptime((st.get("createdAt") or "")[:19],
+                                                      "%Y-%m-%dT%H:%M:%S"))
+            except (TypeError, ValueError):
+                since = None
+            live[login] = {"since": since, "viewers": st.get("viewersCount"),
+                           "game": (st.get("game") or {}).get("displayName") or ""}
+        return {"live": live, "names": names}
     except Exception as e:
-        dbg("! live:", e)
+        dbg("! stream info:", e)
         return None
+
+
+def fetch_live_set(channels):
+    """Кто из каналов сейчас в эфире. set логинов или None."""
+    info = fetch_stream_info(channels)
+    return None if info is None else set(info["live"])
 
 
 def fetch_reward_maps(channels):
@@ -1724,7 +1801,7 @@ class IrcThread(threading.Thread):
             if text.startswith("\x01ACTION ") and text.endswith("\x01"):
                 action = True
                 text = text[8:-1]
-            extra = {}
+            extra = {"ts": _msg_time(tags)}
             rp_login = tags.get("reply-parent-user-login", "").lower()
             if rp_login:
                 extra["reply"] = (tags.get("reply-parent-display-name") or rp_login, rp_login,
@@ -1797,7 +1874,8 @@ class IrcThread(threading.Thread):
                           resolve_badges(self.badge_maps, channel, tags.get("badges", "")),
                           (tags.get("login") or "").lower(),
                           tags.get("user-id", ""), tags.get("id", ""),
-                          tags.get("reply-parent-user-login", "").lower()))
+                          tags.get("reply-parent-user-login", "").lower(),
+                          {"ts": _msg_time(tags)}))
         elif cmd == "NOTICE":
             if trailing:
                 low = trailing.lower()
@@ -1970,6 +2048,61 @@ class RoundButton(tk.Canvas):
         self._draw()
 
 
+class TabPill(tk.Canvas):
+    """Вкладка чата: аватарка канала, имя и счётчик непрочитанного в «пилюле»."""
+
+    H = 26
+
+    def __init__(self, parent, command=None, parent_bg=None, fonts=None):
+        super().__init__(parent, width=32, height=self.H, bg=parent_bg or BG,
+                         highlightthickness=0, bd=0, cursor="hand2")
+        self._bg = parent_bg or BG
+        self._font, self._font_b = fonts
+        self._command = command
+        self._hover = False
+        self._st = dict(image=None, text="", bold=False, fg=FG, fill=None,
+                        count="", count_fg=FG)
+        self.bind("<Button-1>", lambda e: self._command and self._command())
+        self.bind("<Enter>", lambda e: self._set_hover(True), add="+")
+        self.bind("<Leave>", lambda e: self._set_hover(False), add="+")
+
+    def _set_hover(self, on):
+        self._hover = on
+        self._draw()
+
+    def set(self, **kw):
+        self._st.update(kw)
+        self._draw()
+
+    def _draw(self):
+        st = self._st
+        font = self._font_b if st["bold"] else self._font
+        els = []
+        if st["image"] is not None:
+            els.append(("img", 16))
+        if st["text"]:
+            els.append(("txt", font.measure(st["text"])))
+        if st["count"]:
+            els.append(("cnt", self._font_b.measure(st["count"])))
+        pad, gap, h = 8, 5, self.H
+        w = pad * 2 + sum(e[1] for e in els) + gap * max(0, len(els) - 1)
+        self.delete("all")
+        self.configure(width=w)
+        fill = st["fill"] or (_lighten(self._bg, 0.08) if self._hover else None)
+        if fill:
+            _pill(self, 0, 1, w, h - 1, fill)
+        x = pad
+        for kind, ew in els:
+            if kind == "img":
+                self.create_image(x, h // 2, image=st["image"], anchor="w")
+            elif kind == "txt":
+                self.create_text(x, h / 2, text=st["text"], anchor="w", fill=st["fg"], font=font)
+            else:
+                self.create_text(x, h / 2, text=st["count"], anchor="w", fill=st["count_fg"],
+                                 font=self._font_b)
+            x += ew + gap
+
+
 class RoundEntry(tk.Canvas):
     """Поле ввода-«пилюля»: скруглённый фон, внутри обычный Entry."""
 
@@ -2070,9 +2203,10 @@ class RoundSlider(tk.Canvas):
 class Tooltip:
     """Маленькая всплывающая подсказка для кнопок (в tkinter её нет из коробки)."""
 
-    def __init__(self, widget, text_key):
+    def __init__(self, widget, text_key, text=None):
         self.widget = widget
         self.key = text_key
+        self.text = text
         self.tip = None
         self._after = None
         widget.bind("<Enter>", self._schedule, add="+")
@@ -2092,7 +2226,8 @@ class Tooltip:
             self.tip = tk.Toplevel(self.widget)
             self.tip.overrideredirect(True)
             self.tip.attributes("-topmost", True)
-            tk.Label(self.tip, text=T(self.key), bg=ENTRY_BG, fg=FG,
+            tk.Label(self.tip, text=self.text if self.text is not None else T(self.key),
+                     bg=ENTRY_BG, fg=FG,
                      font=("Segoe UI", 9), padx=7, pady=3).pack()
             self.tip.geometry("+%d+%d" % (x, y))
             self.tip.update_idletasks()
@@ -2172,6 +2307,19 @@ class OverlayApp:
         self.auto_update = tk.BooleanVar(value=bool(cfg.get("auto_update", True)))
         self.chan_avatars = tk.BooleanVar(value=bool(cfg.get("chan_avatars", True)))
         self._av_fetching = set()   # twitch-id источников совместного чата, чьи аватарки уже запрошены
+        self.show_ts = tk.BooleanVar(value=bool(cfg.get("timestamps", True)))
+        self._stream_info = {}          # логин -> {'since', 'viewers', 'game'} — кто в эфире
+        self._stream_info_loaded = False
+        self._display_names = {}        # логин -> имя как на Twitch (с регистром)
+        self._title_parts = []
+        self._info_dirty = False
+        self._info_ticks = 0
+        self._tabs_dirty = False
+        self._tab_photos = {}           # url аватарки -> PhotoImage вкладки
+        self._add_win = None
+        self.add_btn = None
+        self._rtip = None
+        self._rtip_text = None
         # автообновление: idle → available → downloading → ready | failed
         self._upd = {"state": "idle", "rel": None, "tag": "", "path": None, "err": "",
                      "apply": False}
@@ -2203,15 +2351,22 @@ class OverlayApp:
         self.font_small = tkfont.Font(family=base_family, size=max(8, size - 2))
         self.font_small_b = tkfont.Font(family=base_family, size=max(8, size - 2), weight="bold")
         self.font_tag = tkfont.Font(family=base_family, size=max(7, size - 4), weight="bold")
+        self.font_ts = tkfont.Font(family=base_family, size=max(8, size - 1))
+        self.font_tab = tkfont.Font(family=base_family, size=9)
+        self.font_tab_b = tkfont.Font(family=base_family, size=9, weight="bold")
+        self.font_meta = tkfont.Font(family=base_family, size=9)
 
         # --- верхняя полоса ---
         self.bar = tk.Frame(frame, bg=BAR_BG)
         self.bar.pack(fill="x")
+        # шапка как у чата Twitch: ● канал · время эфира · зрители · категория
+        self.live_dot = tk.Label(self.bar, text="●", bg=BAR_BG, fg=LIVE_RED,
+                                 font=(base_family, 9), padx=0, cursor="fleur")
         self.title_lbl = tk.Label(self.bar, text="Twitch", bg=BAR_BG, fg=FG,
-                                  font=(base_family, 10, "bold"), padx=8, pady=4, cursor="fleur")
-        self.title_lbl.pack(side="left")
+                                  font=(base_family, 10, "bold"), padx=4, pady=4, cursor="fleur")
+        self.meta_lbl = tk.Label(self.bar, text="", bg=BAR_BG, fg=SYS_FG, font=self.font_meta,
+                                 anchor="w", cursor="fleur")
         self.hint_lbl = tk.Label(self.bar, text="", bg=BAR_BG, fg=SYS_FG, font=(base_family, 8))
-        self.hint_lbl.pack(side="left")
         self.close_btn = tk.Label(self.bar, text=" ✕ ", bg=BAR_BG, fg=BTN_FG,
                                   font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.close_btn.pack(side="right", padx=(0, 4))
@@ -2224,6 +2379,11 @@ class OverlayApp:
         self.min_btn = tk.Label(self.bar, text=" — ", bg=BAR_BG, fg=BTN_FG,
                                 font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.min_btn.pack(side="right")
+        # надписи слева пакуются после кнопок: в узком окне ужимается текст, а не кнопки
+        self.title_lbl.pack(side="left", padx=(6, 0))
+        self.meta_lbl.pack(side="left")
+        self.hint_lbl.pack(side="left")
+        self.bar.bind("<Configure>", lambda e: self._fit_title_meta(), add="+")
         # ⟳ появляется только когда есть обновление
         self.upd_btn = tk.Label(self.bar, text="", bg=BAR_BG, fg=ACCENT,
                                 font=(base_family, 10, "bold"), cursor="hand2", padx=4)
@@ -2298,14 +2458,14 @@ class OverlayApp:
             Tooltip(w, key)
 
         # --- события ---
-        for w in (self.bar, self.title_lbl, self.hint_lbl):
+        for w in (self.bar, self.live_dot, self.title_lbl, self.meta_lbl, self.hint_lbl):
             w.bind("<ButtonPress-1>", self.drag_start)
             w.bind("<B1-Motion>", self.drag_move)
             w.bind("<ButtonRelease-1>", lambda e: self.save_geometry())
         self.grip.bind("<ButtonPress-1>", self.resize_start)
         self.grip.bind("<B1-Motion>", self.resize_move)
         self.grip.bind("<ButtonRelease-1>", lambda e: self.save_geometry())
-        for w in (root, self.bar, self.title_lbl):
+        for w in (root, self.bar, self.live_dot, self.title_lbl, self.meta_lbl):
             w.bind("<Button-3>", self.open_settings)
 
         self._build_icon_photos()
@@ -2329,6 +2489,7 @@ class OverlayApp:
         self.poll_keys()
         self.keep_topmost()
         self._animate()
+        self.root.after(60000, self._info_tick)
 
     # ---------- меню ----------
 
@@ -2515,6 +2676,8 @@ class OverlayApp:
 
         tk.Checkbutton(row(), text=T("s_anim"), variable=self.anim_enabled,
                        command=self.toggle_animations, **chk).pack(side="left")
+        tk.Checkbutton(row(), text=T("s_timestamps"), variable=self.show_ts,
+                       command=self._toggle_ts, **chk).pack(side="left")
 
         rb = dict(bg=BG, fg=FG, activebackground=BG, activeforeground=FG,
                   selectcolor=ENTRY_BG, font=lbl_font, highlightthickness=0,
@@ -2682,6 +2845,7 @@ class OverlayApp:
         self.font_small.configure(size=max(8, size - 2))
         self.font_small_b.configure(size=max(8, size - 2))
         self.font_tag.configure(size=max(7, size - 4))
+        self.font_ts.configure(size=max(8, size - 1))
         self._build_icon_photos()  # иконки перерисовываем под новый кегль
         self._sync_announce_icon()
         try:
@@ -2741,6 +2905,8 @@ class OverlayApp:
         self.frame.configure(bg=BG)
         self.bar.configure(bg=BAR_BG)
         self.title_lbl.configure(bg=BAR_BG, fg=FG)
+        self.live_dot.configure(bg=BAR_BG)
+        self.meta_lbl.configure(bg=BAR_BG, fg=SYS_FG)
         self.hint_lbl.configure(bg=BAR_BG, fg=SYS_FG)
         self.close_btn.configure(bg=BAR_BG, fg=BTN_FG)
         self.gear_btn.configure(bg=BAR_BG, fg=BTN_FG)
@@ -2767,11 +2933,13 @@ class OverlayApp:
             w.tag_configure("first", background=FIRST_BG, lmargincolor=FIRST_FG)
             w.tag_configure("firstlbl", foreground=FIRST_FG)
             w.tag_configure("reward", background=REWARD_BG)
-            w.tag_configure("mention", background=MENTION_BG)
-        self.tab_bar.configure(bg=BAR_BG)
-        for b in self.tab_bar.winfo_children():
-            b.configure(bg=BAR_BG)
-        self._style_tabs()
+            w.tag_configure("hlmsg", background=HL_BG, lmargincolor=ACCENT)
+            w.tag_configure("mention", background=MENTION_BG, lmargincolor=MENTION_EDGE)
+            w.tag_configure("ts", foreground=TS_FG)
+            w.tag_configure("rpglyph", foreground=TS_FG)
+            w.tag_configure("link", foreground=LINK_FG)
+        self.tab_bar.configure(bg=TABBAR_BG)
+        self._rebuild_tabs()
         for h in self._col_headers.values():
             h.configure(bg=BAR_BG, fg=SYS_FG)
         self._style_col_headers()
@@ -2891,10 +3059,19 @@ class OverlayApp:
     def jump_to_bottom(self, event=None):
         self.newmsg_count = 0
         self.newmsg_btn.place_forget()
-        self.text.see("end")
+        w = self.text
+        w._follow = True
+        try:
+            if w.winfo_ismapped():
+                self._smooth_to_end(w)
+            else:
+                w.see("end")
+        except tk.TclError:
+            pass
 
     def _show_newmsg_btn(self):
-        self.newmsg_btn.set_text(T("newmsgs", self.newmsg_count))
+        self.newmsg_btn.set_text(T("newmsgs", self.newmsg_count) if self.newmsg_count
+                                 else T("paused"))
         self.newmsg_btn.place(in_=self.text, relx=0.5, rely=1.0, anchor="s", y=-8)
 
     def cycle_send_channel(self, event=None):
@@ -2924,7 +3101,7 @@ class OverlayApp:
                 badges = resolve_badges(irc.badge_maps, channel, btag)
                 irc.put(("msg", channel, name, color, segs, False, badges,
                          (self.cfg.get("login") or "").lower(),
-                         self.cfg.get("user_id", ""), ""))
+                         self.cfg.get("user_id", ""), "", "", {"ts": time.time()}))
 
             DOWNLOAD_POOL.submit(build_echo)
         else:
@@ -3110,16 +3287,96 @@ class OverlayApp:
 
     def _refresh_live(self):
         """Фоново обновить список каналов в эфире; результат заберёт poll_queue."""
+        self._refresh_stream_info()
+
+    def _refresh_stream_info(self):
+        """Кто в эфире, сколько зрителей, какая категория — фоном, итог заберёт poll_queue."""
         chans = list(self.cfg.get("channels") or [])
-        if len(chans) < 2:
+        if not chans:
             return
 
         def run():
-            s = fetch_live_set(chans)
-            if s is not None:
-                self._live = s
-                self._live_dirty = True
+            info = fetch_stream_info(chans)
+            if info is None or chans != list(self.cfg.get("channels") or []):
+                return
+            self._stream_info = info["live"]
+            self._display_names.update(info["names"])
+            self._stream_info_loaded = True
+            self._info_dirty = True
+            self._live = set(info["live"])
+            self._live_dirty = True
         DOWNLOAD_POOL.submit(run)
+
+    def _info_tick(self):
+        """Раз в минуту — время эфира в шапке; раз в две — свежие зрители и статус."""
+        self._info_ticks += 1
+        if self._info_ticks % 2 == 0:
+            self._refresh_stream_info()
+        self._update_title()
+        self.root.after(60000, self._info_tick)
+
+    def _update_title(self):
+        """Шапка как в чате Twitch: ● канал · 3ч 7м · 2 779 · категория."""
+        chans = self.cfg.get("channels") or []
+        info = self._stream_info or {}
+        key = self.active_tab if self.active_tab in chans else (
+            chans[0] if len(chans) == 1 else None)
+        parts = []
+        if key:
+            title = self._display_names.get(key) or key
+            si = info.get(key)
+            live = si is not None
+            if live:
+                if si.get("since"):
+                    mins = max(0, int(time.time() - si["since"]) // 60)
+                    parts.append(T("up_hm", mins // 60, mins % 60) if mins >= 60
+                                 else T("up_m", mins))
+                if si.get("viewers") is not None:
+                    parts.append("{:,}".format(int(si["viewers"])).replace(",", " "))
+                if si.get("game"):
+                    parts.append(si["game"])
+            elif self._stream_info_loaded:
+                parts.append(T("offline"))
+        else:
+            title = T("all_chats") if chans else "Twitch"
+            n = sum(1 for c in chans if c in info)
+            live = n > 0
+            if self._stream_info_loaded and chans:
+                parts.append(T("live_of", n, len(chans)))
+        try:
+            self.title_lbl.configure(text=title)
+            if live:
+                self.live_dot.pack(side="left", padx=(8, 0), before=self.title_lbl)
+                self.title_lbl.pack_configure(padx=(0, 0))
+            else:
+                self.live_dot.pack_forget()
+                self.title_lbl.pack_configure(padx=(6, 0))
+        except tk.TclError:
+            return
+        self._title_parts = parts
+        self._fit_title_meta()
+
+    def _fit_title_meta(self):
+        """Статус эфира ужимается под ширину окна: первой уходит категория."""
+        parts = list(self._title_parts)
+        try:
+            bw = self.bar.winfo_width()
+            used = sum(c.winfo_reqwidth() for c in self.bar.pack_slaves()
+                       if c is not self.meta_lbl)
+        except tk.TclError:
+            return
+        avail = bw - used - 14
+        text = ""
+        while parts:
+            cand = " · ".join(parts)
+            if bw <= 1 or self.font_meta.measure(cand) <= avail:
+                text = cand
+                break
+            parts.pop()
+        try:
+            self.meta_lbl.configure(text=text)
+        except tk.TclError:
+            pass
 
     def set_expanded(self, on):
         on = bool(on)
@@ -3393,6 +3650,13 @@ class OverlayApp:
             w.configure(bg=color)
         self.grip.configure(bg=color)
 
+    def _toggle_ts(self):
+        """Время у сообщений: скрываем/показываем сразу во всех лентах (без перерисовки)."""
+        self.cfg["timestamps"] = bool(self.show_ts.get())
+        save_config(self.cfg)
+        for w in self.texts.values():
+            w.tag_configure("ts", elide=not self.show_ts.get())
+
     def _save_chat_extras(self):
         self.cfg["chat_extras"] = bool(self.chat_extras.get())
         save_config(self.cfg)
@@ -3519,7 +3783,7 @@ class OverlayApp:
             self.upd_btn.configure(text=" ⟳ … " if st["state"] == "downloading"
                                    else " ⟳ %s " % st["tag"], bg=BAR_BG, fg=ACCENT)
             if not self._upd_btn_shown:
-                self.upd_btn.pack(side="right")
+                self.upd_btn.pack(side="right", before=self.title_lbl)
                 self._upd_btn_shown = True
         elif self._upd_btn_shown:
             self.upd_btn.pack_forget()
@@ -3707,7 +3971,8 @@ class OverlayApp:
         self._flash_step()
 
     def _flash_step(self):
-        color = ACCENT if self._flash_count % 2 == 1 else BAR_BG
+        # чётные шаги — цвет, нечётные — обычный фон: последний шаг (1) возвращает шапку
+        color = MENTION_EDGE if self._flash_count % 2 == 0 else BAR_BG
         try:
             self.bar.configure(bg=color)
             for w in self.bar.winfo_children():
@@ -3781,12 +4046,8 @@ class OverlayApp:
         channels = [c for c in channels if c]
         self.cfg["channels"] = channels
         save_config(self.cfg)
-        if len(channels) > 1:
-            self.title_lbl.configure(text="#%s +%d" % (channels[0], len(channels) - 1))
-        elif channels:
-            self.title_lbl.configure(text="#" + channels[0])
-        else:
-            self.title_lbl.configure(text="Twitch")
+        self._stream_info_loaded = False
+        self._refresh_stream_info()
         # ленты вкладок: по одной на канал + общая "*"
         self.unread = {}  # смена набора каналов — счётчики обнуляем
         for ch in list(self.texts.keys()):
@@ -3841,13 +4102,14 @@ class OverlayApp:
                     for k, v in by_id_old.items():
                         merged.setdefault(k, v)
                     badge_maps["_ready"] = True
+                    # аватарки для вкладок (16px) готовим здесь, чтобы окно не ждало сеть
+                    for ch in channels:
+                        url = (badge_maps.get("_avatars") or {}).get(ch)
+                        if url:
+                            avatar_icon(url, 16)
+                    self._tabs_dirty = True
                     seventv_maps.update(fetch_7tv_maps(channels, ids))
                     reward_maps.update(fetch_reward_maps(channels))
-                    if len(channels) > 1:
-                        live = fetch_live_set(channels)
-                        if live is not None:
-                            self._live = live
-                            self._live_dirty = True
                 except Exception as e:
                     dbg("! assets:", e)
                 if stop_event.wait(900):
@@ -3861,6 +4123,7 @@ class OverlayApp:
         for w in self.texts.values():
             w.configure(state="normal")
             w.delete("1.0", "end")
+            w.tag_add("tail", "end-1c", "end")
             w.configure(state="disabled")
 
     def sys_message(self, msg):
@@ -3892,13 +4155,18 @@ class OverlayApp:
             self.update_input_bar()
             self.render(("sys", T("auth_stale")))
             self.connect(self.cfg["channels"])
-        # если сами доскроллили вниз — прячем кнопку «новые сообщения»
-        if self.newmsg_count:
-            try:
-                if self.text.yview()[1] > 0.97:
-                    self.jump_to_bottom()
-            except tk.TclError:
-                pass
+        # лента снова едет за чатом — кнопка «на паузе / новые сообщения» не нужна
+        if getattr(self.text, "_follow", True) and self.newmsg_btn.winfo_ismapped():
+            self.newmsg_count = 0
+            self.newmsg_btn.place_forget()
+        if self._info_dirty:
+            self._info_dirty = False
+            self._update_title()
+            self._style_tabs()
+        if self._tabs_dirty:
+            self._tabs_dirty = False
+            if self.layout == "tabs":
+                self._rebuild_tabs()
         self._sync_announce_icon()  # статус модерки приходит из USERSTATE асинхронно
         if self._upd_dirty:
             self._upd_dirty = False
@@ -4090,9 +4358,10 @@ class OverlayApp:
     def _render_into(self, w, flagged):
         """Пачка сообщений в одну ленту за одно переключение state."""
         try:
-            at_bottom = w.yview()[1] > 0.97
+            w.yview()
         except tk.TclError:
             return False
+        follow = self._is_following(w)
         w.configure(state="normal")
         hit_any = False
         for item, hit in flagged:
@@ -4103,33 +4372,102 @@ class OverlayApp:
                 break
         last = int(w.index("end-1c").split(".")[0])
         maxm = int(self.cfg.get("max_messages", 150))
-        if last > maxm:
+        # пока чат на паузе, старое не удаляем — иначе текст уедет из-под глаз
+        # (но и не копим бесконечно)
+        if last > maxm and (follow or last > maxm * 4):
             w.delete("1.0", "%d.0" % (last - maxm + 1))
+        w.tag_add("tail", "end-1c", "end")
         w.configure(state="disabled")
         try:
             visible = bool(w.winfo_ismapped())
         except tk.TclError:
             visible = False
-        if visible:
-            if at_bottom:
+        if follow:
+            if visible:
+                self._smooth_to_end(w)
+            else:
                 w.see("end")
-            elif w is self.text and self.layout != "columns" and not self._is_bare():
-                # пользователь листает историю — счётчик новых снизу (одна лента)
-                fresh = sum(1 for it, _ in flagged if it[0] == "msg")
-                if fresh:
-                    self.newmsg_count += fresh
-                    self._show_newmsg_btn()
+        elif visible and w is self.text and self.layout != "columns" and not self._is_bare():
+            # пользователь листает историю — счётчик новых снизу (одна лента)
+            fresh = sum(1 for it, _ in flagged if it[0] == "msg")
+            if fresh:
+                self.newmsg_count += fresh
+                self._show_newmsg_btn()
         return hit_any
+
+    def _is_following(self, w):
+        """Едет ли лента за новыми сообщениями (не на паузе)."""
+        if getattr(w, "_follow", True):
+            return True
+        # сами докрутили до самого низа — чат снова идёт
+        try:
+            if w.yview()[1] >= 0.999:
+                w._follow = True
+                return True
+        except tk.TclError:
+            pass
+        return False
+
+    def _smooth_to_end(self, w):
+        """Новые сообщения «въезжают» снизу: лента плавно доезжает до конца."""
+        if getattr(w, "_anim", None):
+            return   # уже едем — шаг сам подхватит новую цель
+        w._anim = w.after(15, lambda: self._scroll_step(w, None))
+
+    def _scroll_step(self, w, prev):
+        w._anim = None
+        try:
+            if not getattr(w, "_follow", True):
+                return
+            w.tk.call(w._w, "sync")   # высоты новых строк — посчитать сейчас
+            first, last = w.yview()
+            if last >= 0.99999:
+                return
+            target = 1.0 - (last - first)
+            if target - first < 0.0005 or first == prev:
+                w.yview_moveto(1.0)   # почти доехали (или шаг меньше пикселя) — встаём в конец
+                return
+            w.yview_moveto(first + (target - first) * 0.25)
+            w._anim = w.after(15, lambda: self._scroll_step(w, first))
+        except tk.TclError:
+            pass
+
+    def _on_wheel(self, w, event):
+        """Колесо: вверх — чат на паузу (как на Twitch), до низа — снова едет."""
+        if event.delta > 0:
+            w._follow = False
+            if getattr(w, "_anim", None):
+                try:
+                    w.after_cancel(w._anim)
+                except Exception:
+                    pass
+                w._anim = None
+        w.after_idle(lambda: self._after_user_scroll(w))
+
+    def _after_user_scroll(self, w):
+        try:
+            if w.yview()[1] >= 0.999:
+                w._follow = True
+        except tk.TclError:
+            return
+        if getattr(w, "_follow", True):
+            if w is self.text:
+                self.newmsg_count = 0
+                self.newmsg_btn.place_forget()
+        elif w is self.text and self.layout != "columns" and not self._is_bare():
+            self._show_newmsg_btn()   # «чат на паузе — вниз»
 
     def _make_text(self):
         """Создаёт ленту чата со всеми тегами и биндами (одна на вкладку)."""
         w = tk.Text(self.feed_area, bg=BG, fg=FG, bd=0, highlightthickness=0,
                     wrap="word", state="disabled", padx=8, pady=6,
-                    cursor="arrow", font=self.font_msg, spacing1=3, spacing3=1,
+                    cursor="arrow", font=self.font_msg, spacing1=4, spacing2=1, spacing3=3,
                     selectbackground=SELECT_BG)
         w.tag_configure("sys", foreground=SYS_FG, font=self.font_sys)
         w.tag_configure("msg", foreground=FG, font=self.font_msg)
         w.tag_configure("chip", foreground=CHIP_FG, font=self.font_chip)
+        w.tag_configure("ts", foreground=TS_FG, font=self.font_ts, elide=not self.show_ts.get())
+        w.tag_configure("rpglyph", foreground=TS_FG)
         w.tag_configure("hdr", foreground=SYS_FG, font=self.font_small)
         w.tag_configure("hdrnick", foreground=FG, font=self.font_small_b)  # кому отвечают
         # первое сообщение в чате — как в 7TV: розовая кромка слева, подложка и метка справа
@@ -4137,72 +4475,199 @@ class OverlayApp:
                         lmargincolor=FIRST_FG)
         w.tag_configure("firstlbl", foreground=FIRST_FG, font=self.font_tag, justify="right")
         w.tag_configure("reward", background=REWARD_BG)   # ниже «mention»: упоминание важнее
-        w.tag_configure("mention", background=MENTION_BG)
+        # «Выделить сообщение» за баллы — фиолетовая полоса; вас отметили — красная
+        w.tag_configure("hlmsg", background=HL_BG, lmargin1=4, lmargin2=4, lmargincolor=ACCENT)
+        w.tag_configure("mention", background=MENTION_BG, lmargin1=4, lmargin2=4,
+                        lmargincolor=MENTION_EDGE)
         w.tag_configure("atbold", font=self.font_nick)
+        w.tag_configure("link", foreground=LINK_FG)
+        w.tag_configure("rpdata", elide=True)   # исходное сообщение ответа — для подсказки
+        # последняя строка ленты всегда пустая — делаем её почти нулевой высоты,
+        # чтобы свежее сообщение стояло у самого низа
+        w.tag_configure("tail", font=(self.font_msg.cget("family"), 1),
+                        spacing1=0, spacing2=0, spacing3=0)
+        w.tag_add("tail", "end-1c", "end")
         w.tag_bind("nicklink", "<Enter>", lambda e, t=w: t.configure(cursor="hand2"))
         w.tag_bind("nicklink", "<Leave>", lambda e, t=w: t.configure(cursor="arrow"))
+        w.tag_bind("link", "<Enter>", lambda e, t=w: t.configure(cursor="hand2"))
+        w.tag_bind("link", "<Leave>", lambda e, t=w: t.configure(cursor="arrow"))
+        w.tag_bind("link", "<Button-1>", lambda e, t=w: self._open_link(t, e))
+        w.tag_bind("rpline", "<Motion>", lambda e, t=w: self._reply_tip(t, e))
+        w.tag_bind("rpline", "<Leave>", lambda e: self._reply_tip_hide())
         w.bind("<Button-3>", self.open_settings)
+        w.bind("<MouseWheel>", lambda e, t=w: self._on_wheel(t, e), add="+")
         w._utags = set()   # кликабельные ники этой ленты
         w._ctags = set()   # цветовые теги этой ленты
+        w._follow = True   # лента едет за новыми сообщениями; прокрутили вверх — пауза
+        w._anim = None
         return w
 
     def _rebuild_tabs(self):
         for c in self.tab_bar.winfo_children():
             c.destroy()
         self._tab_btns = {}
+        self.add_btn = None
         chans = self.cfg.get("channels") or []
         if self.layout != "tabs" or not chans:
             self.tab_bar.pack_forget()
             return
-        if len(chans) > 1:
-            for key, text in [("*", T("tab_all"))] + [(c, "#" + c) for c in chans]:
-                b = tk.Label(self.tab_bar, text=text, bg=BAR_BG, fg=SYS_FG,
-                             font=("Segoe UI", 9), padx=8, pady=3, cursor="hand2")
-                b.pack(side="left")
-                b.bind("<Button-1>", lambda e, k=key: self.switch_tab(k))
-                self._tab_btns[key] = b
-        # справа — поле «＋ ссылка или канал»: вставил ссылку, Enter — чат открылся
-        self.tab_add = RoundEntry(self.tab_bar, font=("Segoe UI", 9), height=22,
-                                  parent_bg=BAR_BG)
-        self.tab_add.configure(width=168)
-        self.tab_add.pack(side="right", padx=(6, 8), pady=2)
-        self._placeholder(self.tab_add.entry, T("tab_add_ph"))
-        self.tab_add.entry.bind("<Return>", self._add_channel_from_tab)
-        self.tab_add.entry.bind("<Escape>", lambda e: (self.tab_add.entry.delete(0, "end"),
-                                                        self.root.focus_set()))
-        Tooltip(self.tab_add, "tab_add_ph")
+        self.tab_bar.configure(bg=TABBAR_BG)
+        keys = (["*"] if len(chans) > 1 else []) + list(chans)
+        for i, key in enumerate(keys):
+            b = TabPill(self.tab_bar, parent_bg=TABBAR_BG, fonts=(self.font_tab, self.font_tab_b),
+                        command=lambda k=key: self.root.after_idle(lambda: self.switch_tab(k)))
+            b.pack(side="left", padx=(6 if i == 0 else 2, 0), pady=4)
+            if key != "*":
+                b.bind("<Button-2>", lambda e, k=key: self.root.after_idle(
+                    lambda: self.close_channel(k)))
+                Tooltip(b, "", text=T("tab_tt", self._display_names.get(key) or key))
+            self._tab_btns[key] = b
+        # «+» сразу за вкладками: вставить ссылку — и чат открыт
+        self.add_btn = RoundButton(self.tab_bar, "+", command=self.open_add_popup,
+                                   fill=TABBAR_BG, fg=SYS_FG, parent_bg=TABBAR_BG,
+                                   font=("Segoe UI", 11), padx=9, pady=0)
+        self.add_btn.pack(side="left", padx=(4, 0), pady=4)
+        Tooltip(self.add_btn, "tt_add")
         self._style_tabs()
         if not self._is_bare():
             self.tab_bar.pack(fill="x", after=self.bar)
 
-    def _placeholder(self, ent, text):
-        """Серая подсказка в пустом Entry; исчезает при фокусе, возвращается пустому."""
-        def show(e=None):
-            if not ent.get():
-                ent.insert(0, text)
-                ent.configure(fg=SYS_FG)
-                ent._ph = True
+    def _tab_avatar(self, login):
+        """Аватарка канала для вкладки (16px) — только из готового кэша, без сети."""
+        if not self.chan_avatars.get() or not self.irc:
+            return None
+        url = (self.irc.badge_maps.get("_avatars") or {}).get(login)
+        if not url:
+            return None
+        ph = self._tab_photos.get(url)
+        if ph is None:
+            b64 = AVATAR_CACHE.get("%s|16" % url)
+            if not b64:
+                return None
+            try:
+                ph = tk.PhotoImage(data=b64)
+            except tk.TclError:
+                return None
+            self._tab_photos[url] = ph
+        return ph
 
-        def hide(e=None):
-            if getattr(ent, "_ph", False):
-                ent.delete(0, "end")
-                ent.configure(fg=FG)
-                ent._ph = False
-        ent._ph = False
-        ent.bind("<FocusIn>", hide)
-        ent.bind("<FocusOut>", show)
-        show()
+    def _style_tabs(self):
+        chans = self.cfg.get("channels") or []
+        cap = lambda v: "99+" if v > 99 else str(v)
+        for key, b in self._tab_btns.items():
+            active = key == self.active_tab or (len(chans) == 1 and self.active_tab == "*")
+            c = None if active else self.unread.get(key)
+            n = c["n"] if c else 0
+            hl = c["hl"] if c else 0
+            if key == "*":
+                img, name = None, T("tab_all")
+            else:
+                img = self._tab_avatar(key)
+                name = self._display_names.get(key) or key
+            # как на скрине: у активной вкладки имя, у остальных — только аватарка
+            show_name = key == "*" or active or img is None
+            count = ("✱" + cap(hl)) if hl else (("·" + cap(n)) if n else "")
+            try:
+                b.set(image=img, text=name if show_name else "", bold=active,
+                      fg=FG if active else SYS_FG, fill=TAB_ON if active else None,
+                      count=count, count_fg="#ff5c72" if hl else SYS_FG)
+            except tk.TclError:
+                pass
 
-    def _add_channel_from_tab(self, event=None):
-        """Enter в поле полосы вкладок: разобрать ссылку/имя и открыть этот чат."""
-        ent = self.tab_add.entry
-        raw = "" if getattr(ent, "_ph", False) else ent.get()
-        chans = parse_channels(raw)
-        if not chans:
-            self.sys_message(T("add_bad"))
+    def open_add_popup(self):
+        """«+» в полосе вкладок: окошко для ссылки на чат (и избранное в один клик)."""
+        if self._add_win is not None and self._add_win.winfo_exists():
+            self._close_add_popup()
             return
-        ent.delete(0, "end")
-        self.root.focus_set()
+        win = tk.Toplevel(self.root)
+        self._add_win = win
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=BORDER)
+        box = tk.Frame(win, bg=BAR_BG, padx=12, pady=10)
+        box.pack(padx=1, pady=1)
+        tk.Label(box, text=T("add_title"), bg=BAR_BG, fg=FG,
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        pill = RoundEntry(box, font=("Segoe UI", 10), fill=ENTRY_BG, fg=FG,
+                          parent_bg=BAR_BG, height=30)
+        pill.configure(width=290)
+        pill.pack(fill="x", pady=(6, 4))
+        ent = pill.entry
+        ent.configure(selectbackground=ACCENT, selectforeground="#ffffff")
+        self._add_entry = ent
+        hint = tk.Label(box, text=T("add_hint"), bg=BAR_BG, fg=SYS_FG, font=("Segoe UI", 8),
+                        wraplength=290, justify="left")
+        hint.pack(anchor="w")
+        cur = self.cfg.get("channels") or []
+        favs = [c for c in (self.cfg.get("favorites") or []) if c not in cur][:6]
+        if favs:
+            row = tk.Frame(box, bg=BAR_BG)
+            row.pack(anchor="w", pady=(8, 0))
+            tk.Label(row, text=T("add_favs"), bg=BAR_BG, fg=SYS_FG,
+                     font=("Segoe UI", 8)).pack(side="left", padx=(0, 4))
+            for c in favs:
+                chip = tk.Label(row, text="#" + c, bg=CHIPBTN_BG, fg=FG, font=("Segoe UI", 9),
+                                padx=6, pady=1, cursor="hand2")
+                chip.pack(side="left", padx=(0, 4))
+                chip.bind("<Button-1>", lambda e, ch=c: self._add_from_popup([ch]))
+        # в буфере обмена ссылка на Twitch — подставляем: остаётся нажать Enter
+        try:
+            clip = self.root.clipboard_get()
+        except tk.TclError:
+            clip = ""
+        if "twitch.tv/" in (clip or "").lower() and parse_channels(clip):
+            ent.insert(0, clip.strip()[:200])
+            ent.select_range(0, "end")
+
+        def submit(event=None):
+            chans = parse_channels(ent.get())
+            if not chans:
+                hint.configure(text=T("add_bad"), fg=MENTION_EDGE)
+                return "break"
+            self._add_from_popup(chans)
+            return "break"
+
+        ent.bind("<Return>", submit)
+        ent.bind("<Escape>", lambda e: self._close_add_popup())
+        ent.bind("<FocusOut>", lambda e: win.after(150, self._add_popup_focus_check), add="+")
+        win.update_idletasks()
+        btn = self.add_btn
+        if btn is not None and btn.winfo_ismapped():
+            x, y = btn.winfo_rootx() - 8, btn.winfo_rooty() + btn.winfo_height() + 4
+        else:
+            x, y = self.root.winfo_rootx() + 10, self.root.winfo_rooty() + 40
+        ml, mt, mr, mb = self._monitor_rect()
+        x = max(ml, min(x, mr - win.winfo_width() - 4))
+        y = max(mt, min(y, mb - win.winfo_height() - 4))
+        win.geometry("+%d+%d" % (x, y))
+        dwm_round(win, small=True)
+        ent.focus_force()
+
+    def _add_popup_focus_check(self):
+        win = self._add_win
+        if win is None or not win.winfo_exists():
+            return
+        try:
+            f = self.root.focus_get()
+        except (tk.TclError, KeyError):
+            f = None
+        if f is None or not str(f).startswith(str(win)):
+            self._close_add_popup()
+
+    def _close_add_popup(self):
+        win, self._add_win = self._add_win, None
+        if win is not None:
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+
+    def _add_from_popup(self, chans):
+        self._close_add_popup()
+        self._add_channels(chans)
+
+    def _add_channels(self, chans):
+        """Открыть чаты: новые — вкладками (первая становится активной), знакомый — переключить."""
         cur = list(self.cfg.get("channels") or [])
         new = [c for c in chans if c not in cur]
         if new:
@@ -4212,27 +4677,16 @@ class OverlayApp:
         else:
             self.switch_tab(chans[0])
 
-    def _style_tabs(self):
-        for key, b in self._tab_btns.items():
-            active = key == self.active_tab
-            base = T("tab_all") if key == "*" else "#" + key
-            c = None if active else self.unread.get(key)
-            n = c["n"] if c else 0
-            hl = c["hl"] if c else 0
-            cap = lambda v: "99+" if v > 99 else str(v)
-            if hl > 0:
-                text = "%s ✱%s" % (base, cap(hl))   # упоминания/ответы
-                fg = "#ff5c72"
-                weight = "bold"
-            elif n > 0:
-                text = "%s ·%s" % (base, cap(n))     # просто непрочитанные
-                fg = FG
-                weight = "normal"
-            else:
-                text = base
-                fg = ACCENT if active else SYS_FG
-                weight = "bold" if active else "normal"
-            b.configure(text=text, fg=fg, font=("Segoe UI", 9, weight))
+    def close_channel(self, ch):
+        """Средний клик по вкладке — закрыть этот чат (последний не закрываем)."""
+        chans = list(self.cfg.get("channels") or [])
+        if ch not in chans or len(chans) < 2:
+            return
+        chans.remove(ch)
+        if self.cfg.get("active_tab") == ch or self.active_tab == ch:
+            self.cfg["active_tab"] = "*" if len(chans) > 1 else chans[0]
+        self.send_index = 0
+        self.connect(chans)
 
     def switch_tab(self, key, force=False):
         if key not in self.texts:
@@ -4348,10 +4802,12 @@ class OverlayApp:
             self._style_tabs()
 
         self.grip.lift()
+        self.text._follow = True
         try:
             self.text.see("end")
         except tk.TclError:
             pass
+        self._update_title()
 
     def user_tag(self, w, login):
         """Тег «клик по нику -> профиль twitch.tv/login» (создаётся один раз)."""
@@ -4589,17 +5045,25 @@ class OverlayApp:
 
     _AT_RE = re.compile(r"(@[A-Za-z0-9_]{3,25})")
 
+    _URL_RE = re.compile(r"((?:https?://|www\.)[^\s]+)", re.IGNORECASE)
+
     def _insert_body_text(self, w, part, body_tag):
-        """Текст сообщения; @упоминания внутри — жирные и кликабельные."""
-        for i, chunk in enumerate(self._AT_RE.split(part)):
-            if not chunk:
+        """Текст сообщения: ссылки кликабельные, @упоминания — жирные и кликабельные."""
+        for j, piece in enumerate(self._URL_RE.split(part)):
+            if not piece:
                 continue
-            if i % 2:  # нечётные куски — сами @упоминания
-                utag = self.user_tag(w, chunk[1:])
-                tags = (body_tag, "atbold", "nicklink") + ((utag,) if utag else ())
-                w.insert("end", chunk, tags)
-            else:
-                w.insert("end", chunk, body_tag)
+            if j % 2:  # нечётные куски — ссылки
+                w.insert("end", piece, (body_tag, "link"))
+                continue
+            for i, chunk in enumerate(self._AT_RE.split(piece)):
+                if not chunk:
+                    continue
+                if i % 2:  # нечётные куски — сами @упоминания
+                    utag = self.user_tag(w, chunk[1:])
+                    tags = (body_tag, "atbold", "nicklink") + ((utag,) if utag else ())
+                    w.insert("end", chunk, tags)
+                else:
+                    w.insert("end", chunk, body_tag)
 
     def _render_item(self, w, item, mention_hit=False):
         if item[0] == "sys":
@@ -4614,19 +5078,20 @@ class OverlayApp:
         rw = extra.get("reward") if show else None
         rp = extra.get("reply") if show else None
         first = bool(extra.get("first")) and show
-        pad = " " if first else ""   # зазор между розовой кромкой и текстом
+        hl = bool(rw and rw.get("highlight"))
+        # у выделенных блоков слева цветная кромка — текст отодвигаем от неё пробелом
+        pad = " " if (first or mention_hit or hl) else ""
         block_start = int(w.index("end-1c").split(".")[0])
         if first:
             w.insert("end", T("first_msg") + "\n", "firstlbl")
         if rw:
             w.insert("end", pad, "hdr")
             self._insert_reward_header(w, channel, name, rw)
-        if rp:
-            w.insert("end", pad, "hdr")
-            self._insert_reply_header(w, rp)
         line_no = int(w.index("end-1c").split(".")[0])
         if pad:
             w.insert("end", pad, "msg")
+        t = time.localtime(extra.get("ts") or time.time())
+        w.insert("end", "%d:%02d " % (t.tm_hour, t.tm_min), "ts")
         multi = len(self.cfg.get("channels") or []) > 1
         use_av = self.chan_avatars.get()
         # сообщение пришло из другого канала совместного чата — показываем его аватарку
@@ -4661,6 +5126,8 @@ class OverlayApp:
         w.insert("end", name, nick_tags)
         body_tag = self.color_tag(w, color, name, body=True) if action else "msg"
         w.insert("end", " " if action else ": ", "msg")
+        if rp:
+            self._reply_prefix(w, rp, segs)
         for seg in segs:
             if seg[0] == "t":
                 self._insert_body_text(w, seg[1], body_tag)
@@ -4672,24 +5139,83 @@ class OverlayApp:
                 else:
                     w.insert("end", alt, body_tag)
         w.insert("end", "\n")
+        # подложки — вместе с переводом строки, чтобы полоса шла на всю ширину
+        block = ("%d.0" % block_start, "%d.0" % (line_no + 1))
         if mention_hit:
-            w.tag_add("mention", "%d.0" % (block_start if rp else line_no), "%d.end" % line_no)
-        if rw:
-            w.tag_add("mention" if rw.get("highlight") else "reward",
-                      "%d.0" % block_start, "%d.end" % line_no)
-        if first:  # вместе с переводом строки — подложка на всю ширину
-            w.tag_add("first", "%d.0" % block_start, "%d.0" % (line_no + 1))
+            w.tag_add("mention", *block)
+        if hl:
+            w.tag_add("hlmsg", *block)
+        elif rw:
+            w.tag_add("reward", *block)
+        if first:
+            w.tag_add("first", *block)
+        if rp:
+            w.tag_add("rpline", "%d.0" % line_no, "%d.0" % (line_no + 1))
 
-    def _insert_reply_header(self, w, rp):
-        """Строка над ответом, как на Twitch: «Ответ @ник: исходное сообщение»."""
+    def _reply_prefix(self, w, rp, segs):
+        """Ответ одной строкой, как в чате 7TV: «↩ @ник текст».
+        Исходное сообщение лежит в строке невидимым — всплывает при наведении."""
         pname, plogin, pbody = rp
         body = re.sub(r"\s+", " ", pbody or "").strip()
-        if len(body) > 90:
-            body = body[:89] + "…"
-        w.insert("end", "↩ " + T("hdr_reply"), "hdr")
-        utag = self.user_tag(w, plogin)
-        w.insert("end", "@" + pname, ("hdr", "hdrnick", "nicklink") + ((utag,) if utag else ()))
-        w.insert("end", (": " + body if body else "") + "\n", "hdr")
+        if len(body) > 300:
+            body = body[:299] + "…"
+        w.insert("end", "%s@%s: %s" % (T("hdr_reply"), pname, body), "rpdata")
+        w.insert("end", "↩ ", "rpglyph")
+        head = segs[0][1].lower() if segs and segs[0][0] == "t" else ""
+        if not (head.startswith("@" + plogin) or head.startswith("@" + pname.lower())):
+            # «@ник» в начале стёрли — кому ответ, показываем сами
+            utag = self.user_tag(w, plogin)
+            w.insert("end", "@" + pname, ("msg", "atbold", "nicklink") + ((utag,) if utag else ()))
+            w.insert("end", " ", "msg")
+
+    def _reply_tip(self, w, e):
+        """Подсказка с исходным сообщением при наведении на ответ."""
+        try:
+            line = w.index("@%d,%d" % (e.x, e.y)).split(".")[0]
+            rng = w.tag_nextrange("rpdata", "%s.0" % line, "%s.end" % line)
+        except tk.TclError:
+            return
+        if not rng:
+            self._reply_tip_hide()
+            return
+        text = w.get(*rng)
+        if self._rtip is not None and self._rtip_text == text:
+            return
+        self._reply_tip_hide()
+        try:
+            tip = tk.Toplevel(self.root)
+            tip.overrideredirect(True)
+            tip.attributes("-topmost", True)
+            tk.Label(tip, text=text, bg=ENTRY_BG, fg=FG, font=("Segoe UI", 9), padx=8, pady=4,
+                     wraplength=340, justify="left").pack()
+            tip.update_idletasks()
+            tip.geometry("+%d+%d" % (e.x_root + 12, e.y_root - tip.winfo_height() - 10))
+            dwm_round(tip, small=True)
+        except tk.TclError:
+            return
+        self._rtip, self._rtip_text = tip, text
+
+    def _reply_tip_hide(self):
+        tip, self._rtip, self._rtip_text = self._rtip, None, None
+        if tip is not None:
+            try:
+                tip.destroy()
+            except tk.TclError:
+                pass
+
+    def _open_link(self, w, e):
+        """Клик по ссылке в чате — открыть в браузере (только http/https)."""
+        try:
+            idx = w.index("@%d,%d" % (e.x, e.y))
+            rng = w.tag_prevrange("link", idx + "+1c")
+        except tk.TclError:
+            return "break"
+        if rng:
+            url = w.get(*rng).strip().rstrip(".,;:!?)»\"'")
+            if not re.match(r"https?://", url, re.IGNORECASE):
+                url = "https://" + url
+            webbrowser.open(url)
+        return "break"
 
     def _insert_reward_header(self, w, channel, name, rw):
         """Строка над сообщением-наградой: иконка, «ник забирает награду «…»», цена."""
