@@ -115,7 +115,8 @@
   .ov-input .emo::after { content: ""; position: absolute; left: 4px; top: 8px; width: 7px; height: 4px; border: 1.6px solid #9a9aa3; border-top: 0; border-radius: 0 0 8px 8px; }
   .ov-feed { list-style: none; padding: 8px 10px; height: 252px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
   /* новые сообщения въезжают снизу, лента плавно уезжает вверх — как в самом оверлее */
-  .ov-feed li { padding: 3px 4px; border-radius: 4px; overflow: hidden; animation: slidein .45s cubic-bezier(.2, .7, .2, 1) both; }
+  /* flex-shrink: 0 обязателен: с overflow: hidden flex-колонка иначе сплющивает все сообщения */
+  .ov-feed li { flex-shrink: 0; padding: 3px 4px; border-radius: 4px; overflow: hidden; animation: slidein .45s cubic-bezier(.2, .7, .2, 1) both; }
   @keyframes slidein { from { max-height: 0; opacity: 0; } to { max-height: 140px; opacity: 1; } }
   .ov-feed .ts { color: #75747f; margin-right: 5px; font-size: .76rem; }
   .ov-feed .rp { color: #75747f; }
