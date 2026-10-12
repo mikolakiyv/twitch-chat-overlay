@@ -13,3 +13,6 @@ TwitchChatOverlay.exe
 build/
 dist/
 *.spec
+
+# локальные тесты и инструменты разработки (не публикуются)
+.dev/

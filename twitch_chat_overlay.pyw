@@ -57,7 +57,7 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "overlay_config.json")
-APP_VERSION = "1.19.0"
+APP_VERSION = "1.20.0"
 GITHUB_REPO = "mikolakiyv/twitch-chat-overlay"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 # файл самой программы: exe или .pyw — обновление подменяет именно его
@@ -355,6 +355,8 @@ STRINGS = {
         "hdr_reply": "Ответ ",
         "rw_line": "%s забирает награду «%s»",
         "rw_generic": "%s забирает награду за баллы",
+        "rdm_mid": " забирает награду ",
+        "rdm_title": "«%s»",
         "rw_SEND_HIGHLIGHTED_MESSAGE": "Выделить сообщение",
         "rw_SEND_GIGANTIFIED_EMOTE": "Увеличенный смайл",
         "rw_SEND_ANIMATED_MESSAGE": "Эффект сообщения",
@@ -533,6 +535,8 @@ STRINGS = {
         "hdr_reply": "Replying to ",
         "rw_line": "%s redeemed %s",
         "rw_generic": "%s redeemed a channel points reward",
+        "rdm_mid": " redeemed ",
+        "rdm_title": "%s",
         "rw_SEND_HIGHLIGHTED_MESSAGE": "Highlight My Message",
         "rw_SEND_GIGANTIFIED_EMOTE": "Gigantify an Emote",
         "rw_SEND_ANIMATED_MESSAGE": "Message Effects",
@@ -1685,6 +1689,268 @@ def helix(method, path, token, client_id, params=None, body=None):
 
 # ---------------------------------------------------------------- IRC поток
 
+def _iso_to_epoch(s):
+    """'2026-10-12T11:07:58.8008Z' -> unix-время; при ошибке — сейчас."""
+    try:
+        return calendar.timegm(time.strptime((s or "")[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return time.time()
+
+
+class MiniWebSocket:
+    """Минимальный клиент WebSocket (RFC 6455) поверх TLS — ровно то, что нужно для Hermes.
+
+    recv_text() перезапускаемый: если сокет отдал кадр не целиком и случился
+    таймаут, недочитанное остаётся в буфере и дочитывается следующим вызовом.
+    """
+
+    _GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+    def __init__(self, host, path, timeout=15):
+        raw = socket.create_connection((host, 443), timeout=timeout)
+        self.sock = SSL_CTX.wrap_socket(raw, server_hostname=host)
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        self.sock.sendall(("GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\n"
+                           "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
+                           "Sec-WebSocket-Version: 13\r\nOrigin: https://www.twitch.tv\r\n"
+                           "User-Agent: Mozilla/5.0\r\n\r\n" % (path, host, key)).encode("ascii"))
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            d = self.sock.recv(4096)
+            if not d or len(buf) > 65536:
+                raise ConnectionError("websocket: handshake failed")
+            buf += d
+        head, self.buf = buf.split(b"\r\n\r\n", 1)
+        if b" 101 " not in head.split(b"\r\n", 1)[0]:
+            raise ConnectionError("websocket: " + head.split(b"\r\n", 1)[0].decode("latin-1"))
+        accept = base64.b64encode(hashlib.sha1((key + self._GUID).encode("ascii")).digest())
+        if accept not in head:
+            raise ConnectionError("websocket: bad Sec-WebSocket-Accept")
+        self._frag = None
+
+    def settimeout(self, t):
+        self.sock.settimeout(t)
+
+    def send_text(self, text):
+        self._send(1, text.encode("utf-8"))
+
+    def _send(self, op, payload):
+        n = len(payload)
+        if n < 126:
+            head = bytes([0x80 | op, 0x80 | n])
+        elif n < 65536:
+            head = bytes([0x80 | op, 0x80 | 126]) + n.to_bytes(2, "big")
+        else:
+            head = bytes([0x80 | op, 0x80 | 127]) + n.to_bytes(8, "big")
+        mask = os.urandom(4)   # клиент обязан маскировать каждый кадр
+        body = bytes(b ^ mask[i & 3] for i, b in enumerate(payload))
+        self.sock.sendall(head + mask + body)
+
+    def _need(self, n):
+        while len(self.buf) < n:
+            d = self.sock.recv(65536)
+            if not d:
+                raise ConnectionError("websocket: closed")
+            self.buf += d
+
+    def _frame(self):
+        self._need(2)
+        b0, b1 = self.buf[0], self.buf[1]
+        n, off = b1 & 0x7F, 2
+        if n == 126:
+            self._need(4)
+            n, off = int.from_bytes(self.buf[2:4], "big"), 4
+        elif n == 127:
+            self._need(10)
+            n, off = int.from_bytes(self.buf[2:10], "big"), 10
+        if b1 & 0x80:          # сервер не маскирует — но на всякий случай
+            self._need(off + 4)
+            mask, off = self.buf[off:off + 4], off + 4
+        else:
+            mask = None
+        self._need(off + n)
+        data, self.buf = self.buf[off:off + n], self.buf[off + n:]
+        if mask:
+            data = bytes(b ^ mask[i & 3] for i, b in enumerate(data))
+        return bool(b0 & 0x80), b0 & 0x0F, data
+
+    def recv_text(self):
+        """Следующее текстовое сообщение или None (служебный кадр). socket.timeout — наверх."""
+        fin, op, data = self._frame()
+        if op == 9:                      # ping -> pong
+            self._send(10, data)
+            return None
+        if op == 8:
+            raise ConnectionError("websocket: closed by server")
+        if op in (1, 2):
+            if not fin:
+                self._frag = [op, data]
+                return None
+        elif op == 0 and self._frag is not None:
+            self._frag[1] += data
+            if not fin:
+                return None
+            op, data = self._frag
+            self._frag = None
+        else:
+            return None
+        return data.decode("utf-8", "replace") if op == 1 else None
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+HERMES_HOST = "hermes.twitch.tv"
+HERMES_PATH = "/v1?clientId=" + GQL_CLIENT_ID
+
+
+class HermesThread(threading.Thread):
+    """Покупки наград за баллы из Hermes — внутреннего вебсокета twitch.tv.
+
+    Награды без текста в IRC не приходят вообще; сайт Twitch показывает их
+    по событиям отсюда. Подписка на баллы канала работает без логина.
+    Живёт, пока жив IRC-поток: stop_event общий, поэтому stop() гасит обоих —
+    они и запускаются, и останавливаются только парой (connect/quit).
+    """
+
+    def __init__(self, irc):
+        super().__init__(daemon=True)
+        self.irc = irc
+        self.stop_event = irc.stop_event
+        self.ws = None
+        self.subs_ok = set()     # twitch-id каналов с подтверждённой подпиской
+        self._sub_ids = {}       # id подписки -> twitch-id канала
+
+    def stop(self):
+        self.stop_event.set()
+        ws = self.ws
+        if ws is not None:
+            ws.close()
+
+    def run(self):
+        delay, path = 2, None
+        while not self.stop_event.is_set():
+            if not self.irc.channel_ids:      # id каналов приходят вместе с картой значков
+                if self.stop_event.wait(1):
+                    break
+                continue
+            try:
+                path = self._session(path)
+                if path:                      # сервер попросил переехать — сразу
+                    continue
+                delay = 2
+            except Exception as e:
+                path = None
+                if self.stop_event.is_set():
+                    break
+                dbg("! hermes:", e)
+            if self.stop_event.wait(delay):
+                break
+            delay = min(delay * 2, 120)
+
+    @staticmethod
+    def _mkid():
+        return os.urandom(11).hex()[:21]
+
+    def _session(self, path=None):
+        ws = MiniWebSocket(HERMES_HOST, path or HERMES_PATH)
+        self.ws = ws
+        self.subs_ok = set()
+        self._sub_ids = {}
+        sent = set()
+        welcomed = False
+        keepalive, last = 15, time.time()
+        try:
+            ws.settimeout(2)
+            while not self.stop_event.is_set():
+                if welcomed:
+                    # каналы и их id могут появиться позже — подписываемся по мере появления
+                    for login in list(self.irc.channels):
+                        cid = self.irc.channel_ids.get(login)
+                        if cid and cid not in sent:
+                            sid = self._mkid()
+                            self._sub_ids[sid] = cid
+                            sent.add(cid)
+                            ws.send_text(json.dumps({
+                                "type": "subscribe", "id": self._mkid(),
+                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+                                "subscribe": {"id": sid, "type": "pubsub",
+                                              "pubsub": {"topic": "community-points-channel-v1." + cid}}}))
+                try:
+                    text = ws.recv_text()
+                except socket.timeout:
+                    if time.time() - last > keepalive * 2 + 10:
+                        raise ConnectionError("hermes: keepalive timeout")
+                    continue
+                last = time.time()
+                if not text:
+                    continue
+                try:
+                    msg = json.loads(text)
+                except ValueError:
+                    continue
+                kind = msg.get("type")
+                if kind == "welcome":
+                    welcomed = True
+                    try:
+                        keepalive = int((msg.get("welcome") or {}).get("keepaliveSec") or 15)
+                    except (TypeError, ValueError):
+                        keepalive = 15
+                elif kind == "subscribeResponse":
+                    res = msg.get("subscribeResponse") or {}
+                    sid = (res.get("subscription") or {}).get("id")
+                    if res.get("result") == "ok" and sid in self._sub_ids:
+                        self.subs_ok.add(self._sub_ids[sid])
+                    else:
+                        dbg("! hermes subscribe:", text[:200])
+                elif kind == "reconnect":
+                    url = (msg.get("reconnect") or {}).get("url") or ""
+                    pre = "wss://" + HERMES_HOST
+                    return url[len(pre):] if url.startswith(pre + "/") else HERMES_PATH
+                elif kind == "notification":
+                    payload = (msg.get("notification") or {}).get("pubsub")
+                    try:
+                        pj = json.loads(payload) if isinstance(payload, str) else payload
+                        self.handle_pubsub(pj)
+                    except Exception as e:
+                        dbg("! hermes event:", e)
+        finally:
+            ws.close()
+            if self.ws is ws:
+                self.ws = None
+        return None
+
+    def handle_pubsub(self, pj):
+        """Событие «баллы канала» -> строка покупки в ленте (только награды без текста)."""
+        if not isinstance(pj, dict) or pj.get("type") != "reward-redeemed":
+            return
+        red = (pj.get("data") or {}).get("redemption") or {}
+        if (red.get("user_input") or "").strip():
+            return   # с текстом — придёт обычным сообщением чата со своей шапкой
+        cid = str(red.get("channel_id") or "")
+        channel = next((c for c, i in list(self.irc.channel_ids.items()) if i == cid), None)
+        if not channel or channel not in self.irc.channels:
+            return
+        user = red.get("user") or {}
+        login = (user.get("login") or "").lower()
+        reward = red.get("reward") or {}
+        img = reward.get("image") or reward.get("default_image") or {}
+        rw = {"key": "rw:%s" % (reward.get("id") or ""), "title": reward.get("title") or "",
+              "cost": reward.get("cost") or 0, "bg": reward.get("background_color") or "",
+              "icon_url": img.get("url_1x"), "highlight": False, "unknown": False,
+              "pts_url": (self.irc.reward_maps.get(channel) or {}).get("icon")}
+        reward_icons(rw)
+        av_url = (self.irc.badge_maps.get("_avatars") or {}).get(channel)
+        self.irc.put(("redeem", channel, {
+            "name": user.get("display_name") or login or "?", "login": login,
+            "color": self.irc.user_colors.get(login) or "", "rw": rw,
+            "ts": _iso_to_epoch(red.get("redeemed_at")),
+            "av": avatar_icon(av_url) if av_url else None}))
+
+
 class IrcThread(threading.Thread):
     """Читает чат каналов (анонимно или с токеном) и кладёт события в очередь."""
 
@@ -1706,6 +1972,7 @@ class IrcThread(threading.Thread):
         self.send_lock = threading.Lock()
         self.userstate = {}    # канал -> (имя, цвет, значки, есть_модерка)
         self.channel_ids = {}  # канал -> twitch id (заполняет загрузчик карт)
+        self.user_colors = LruDict(3000)   # логин -> цвет ника (для строк покупок наград)
         self.nick = self.login if token else "justinfan%d" % random.randint(10000, 99999)
 
     def stop(self):
@@ -1849,6 +2116,8 @@ class IrcThread(threading.Thread):
             if src_url:
                 extra["src_av"] = avatar_icon(src_url)
             segs = self._apply_7tv(self._segments(text, tags.get("emotes", "")), channel)
+            if tags.get("color"):
+                self.user_colors.put(login.lower(), tags["color"])
             self.put(("msg", channel, name, tags.get("color", ""), segs, action,
                       resolve_badges(self.badge_maps, channel, tags.get("badges", "")),
                       login.lower(), tags.get("user-id", ""), tags.get("id", ""),
@@ -2259,6 +2528,7 @@ class OverlayApp:
         self.cfg = cfg
         self.q = queue.Queue()
         self.irc = None
+        self.hermes = None
         self.images = LruDict(900)  # ключ -> PhotoImage; LRU, чтобы память не росла
         self._anim = {}             # ключ -> состояние анимации смайла
         self.known_tags = set()
@@ -2938,6 +3208,7 @@ class OverlayApp:
             w.tag_configure("ts", foreground=TS_FG)
             w.tag_configure("rpglyph", foreground=TS_FG)
             w.tag_configure("link", foreground=LINK_FG)
+            w.tag_configure("rdmcost", foreground=SYS_FG)
         self.tab_bar.configure(bg=TABBAR_BG)
         self._rebuild_tabs()
         for h in self._col_headers.values():
@@ -4043,6 +4314,8 @@ class OverlayApp:
     def connect(self, channels):
         if self.irc:
             self.irc.stop()
+        if self.hermes:
+            self.hermes.stop()
         channels = [c for c in channels if c]
         self.cfg["channels"] = channels
         save_config(self.cfg)
@@ -4117,6 +4390,9 @@ class OverlayApp:
 
         threading.Thread(target=load_assets, daemon=True).start()
         self.irc.start()
+        # покупки наград без текста приходят не в IRC, а в Hermes
+        self.hermes = HermesThread(self.irc)
+        self.hermes.start()
 
 
     def clear_chat(self):
@@ -4316,14 +4592,14 @@ class OverlayApp:
                 sel = [(it, hit) for it, hit in flagged if not self._is_shared_dup(it)]
             else:
                 sel = [(it, hit) for it, hit in flagged
-                       if it[0] == "sys" or (it[0] == "msg" and it[1] == key)]
+                       if it[0] == "sys" or (it[0] in ("msg", "redeem") and it[1] == key)]
             if not sel:
                 continue
             if self._render_into(w, sel):
                 mention_any = True
             # счётчики непрочитанных для невидимых сейчас лент каналов
             if key != "*" and not w.winfo_ismapped():
-                msgs = [(it, h) for it, h in sel if it[0] == "msg"]
+                msgs = [(it, h) for it, h in sel if it[0] in ("msg", "redeem")]
                 if msgs:
                     c = self.unread.setdefault(key, {"n": 0, "hl": 0})
                     c["n"] += len(msgs)
@@ -4389,7 +4665,7 @@ class OverlayApp:
                 w.see("end")
         elif visible and w is self.text and self.layout != "columns" and not self._is_bare():
             # пользователь листает историю — счётчик новых снизу (одна лента)
-            fresh = sum(1 for it, _ in flagged if it[0] == "msg")
+            fresh = sum(1 for it, _ in flagged if it[0] in ("msg", "redeem"))
             if fresh:
                 self.newmsg_count += fresh
                 self._show_newmsg_btn()
@@ -4481,6 +4757,7 @@ class OverlayApp:
                         lmargincolor=MENTION_EDGE)
         w.tag_configure("atbold", font=self.font_nick)
         w.tag_configure("link", foreground=LINK_FG)
+        w.tag_configure("rdmcost", foreground=SYS_FG)
         w.tag_configure("rpdata", elide=True)   # исходное сообщение ответа — для подсказки
         # последняя строка ленты всегда пустая — делаем её почти нулевой высоты,
         # чтобы свежее сообщение стояло у самого низа
@@ -5069,6 +5346,9 @@ class OverlayApp:
         if item[0] == "sys":
             w.insert("end", item[1] + "\n", "sys")
             return
+        if item[0] == "redeem":
+            self._render_redeem(w, item)
+            return
         _, channel, name, color, segs, action, badges = item[:7]
         login = item[7] if len(item) > 7 else ""
         uid = item[8] if len(item) > 8 else ""
@@ -5151,6 +5431,58 @@ class OverlayApp:
             w.tag_add("first", *block)
         if rp:
             w.tag_add("rpline", "%d.0" % line_no, "%d.0" % (line_no + 1))
+
+    def _render_redeem(self, w, item):
+        """Покупка награды без текста: заметная строка в цвет награды, как на Twitch."""
+        if not self.chat_extras.get():
+            return
+        _, channel, info = item
+        rw = info["rw"]
+        name, login = info["name"], info["login"]
+        line_no = int(w.index("end-1c").split(".")[0])
+        w.insert("end", " ", "msg")   # зазор у цветной кромки
+        t = time.localtime(info.get("ts") or time.time())
+        w.insert("end", "%d:%02d " % (t.tm_hour, t.tm_min), "ts")
+        if len(self.cfg.get("channels") or []) > 1 and w is self.texts.get("*"):
+            av = info.get("av") if self.chan_avatars.get() else None
+            img = self.cached_image("av:" + channel, av) if av else None
+            if img is not None:
+                w.image_create("end", image=img, padx=3)
+            else:
+                w.insert("end", "#%s " % channel, "chip")
+        if rw.get("icon"):
+            img = self.cached_image(rw["key"], rw["icon"])
+            if img is not None:
+                w.image_create("end", image=img, padx=2)
+        utag = self.user_tag(w, login or name)
+        w.insert("end", name, (self.color_tag(w, info.get("color") or "", name), "nicklink")
+                 + ((utag,) if utag else ()))
+        w.insert("end", T("rdm_mid"), "msg")
+        w.insert("end", T("rdm_title", rw.get("title") or "?"), ("msg", "atbold"))
+        cost = rw.get("cost")
+        if cost:
+            w.insert("end", "  ", "msg")
+            pts = self.cached_image("pts:" + channel, rw["pts_b64"]) if rw.get("pts_b64") else None
+            if pts is None:
+                pts = self._pts_photo
+            if pts is not None:
+                w.image_create("end", image=pts, padx=1)
+            w.insert("end", "{:,}".format(int(cost)).replace(",", " "), "rdmcost")
+        w.insert("end", "\n")
+        block = ("%d.0" % line_no, "%d.0" % (line_no + 1))
+        w.tag_add("reward", *block)
+        w.tag_add(self._reward_edge_tag(w, rw.get("bg")), *block)
+
+    def _reward_edge_tag(self, w, color):
+        """Кромка слева в цвет награды (как плашка её иконки)."""
+        c = (color or "").strip()
+        if not re.fullmatch(r"#[0-9A-Fa-f]{6}", c):
+            c = ACCENT
+        tag = "rwe" + c.lower()
+        if tag not in w._ctags:
+            w.tag_configure(tag, lmargin1=4, lmargin2=4, lmargincolor=c)
+            w._ctags.add(tag)
+        return tag
 
     def _reply_prefix(self, w, rp, segs):
         """Ответ одной строкой, как в чате 7TV: «↩ @ник текст».
@@ -5244,6 +5576,8 @@ class OverlayApp:
         self.save_geometry()
         if self.irc:
             self.irc.stop()
+        if self.hermes:
+            self.hermes.stop()
         self.root.destroy()
 
 

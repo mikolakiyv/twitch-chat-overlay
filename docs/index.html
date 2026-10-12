@@ -101,6 +101,8 @@
   .ov-tabs .plus { color: #6e6d78; font-size: .95rem; padding: 0 6px; }
   .ov-feed .hdr { font-size: .7rem; color: #a3a3ab; line-height: 1.35; }
   .ov-feed li.rw { background: #2a2a3d; }
+  .ov-feed li.rdm { background: #232533; box-shadow: inset 3px 0 0 #3ef750; padding-left: 9px; border-radius: 0; }
+  .ov-feed .rdi { background: #3ef750; }
   .ov-feed .rwi { display: inline-block; width: 12px; height: 12px; border-radius: 3px; background: #1f69ff; vertical-align: -2px; margin-right: 4px; }
   .ov-feed .pts { display: inline-block; width: 8px; height: 8px; border: 1.5px solid #a3a3ab; border-radius: 50%; vertical-align: 0; margin: 0 3px 0 2px; }
   .ov-feed li.first { background: #2e1e2b; box-shadow: inset 3px 0 0 #ff6fb4; padding-left: 9px; }
@@ -230,7 +232,7 @@
         </a>
         <a class="alt" href="https://github.com/mikolakiyv/twitch-chat-overlay/releases/latest/download/twitch-chat-overlay.zip">версия с исходниками .zip</a>
       </div>
-      <p class="meta"><span id="ver">v1.19.0</span> · 18 МБ · <b>без установки</b> · <b>обновляется сам</b> · Windows 10/11 · rus/eng</p>
+      <p class="meta"><span id="ver">v1.20.0</span> · 18 МБ · <b>без установки</b> · <b>обновляется сам</b> · Windows 10/11 · rus/eng</p>
     </div>
 
     <div class="scene" aria-hidden="true">
@@ -271,12 +273,11 @@
     <h2>Что <em>нового</em></h2>
     <div class="how">
       <ol style="list-style:none; margin-left:0">
+        <li><b>v1.20</b> — видны все покупки наград за баллы, даже без текста: кто, какую и за сколько — строкой в цвет награды</li>
         <li><b>v1.19</b> — вид как у чата Twitch с 7TV: время у сообщений, красные упоминания, ответы одной строкой, плавная прокрутка и пауза, вкладки с аватарками и «+», шапка с эфиром</li>
         <li><b>v1.18.2</b> — хромакей для OBS без фиолетовой каймы на тексте: ключ стал тёмным (#0b0b10, сходство 10, сглаживание 5)</li>
         <li><b>v1.18.1</b> — в совместном чате иконка канала у каждого сообщения, включая свои; автообновление работает и для файла, переименованного браузером («TwitchChatOverlay (2).exe»)</li>
         <li><b>v1.18</b> — иконки каналов в общей ленте и у сообщений совместного чата, как в Twitch</li>
-        <li><b>v1.17.2</b> — общая лента не дублирует сообщения совместного чата (Shared Chat)</li>
-        <li><b>v1.17.1</b> — в ответах виден «@ник», кому отвечают; ник в шапке ответа заметнее</li>
         <li><b>v1.17</b> — автообновление: новые версии качаются в фоне и ставятся при следующем запуске (или по клику ⟳)</li>
         <li><b>v1.14</b> — ответы «↩ Ответ @ник: …» и награды за баллы канала в ленте</li>
         <li><b>v1.13</b> — F10 открывает только каналы в эфире (●)</li>
@@ -302,7 +303,7 @@
     <div class="show" id="show">
       <div class="stage">
         <figure class="sl on" data-cap="Как чат Twitch: вкладки с аватарками и «+», шапка с эфиром (● 3ч 7м · зрители · игра), время у сообщений"><img src="screenshot_main4.png" alt="Оверлей в стиле чата Twitch: вкладки с аватарками, шапка с эфиром, время сообщений, красное упоминание"><img class="bg" src="screenshot_main4.png" alt="" aria-hidden="true"></figure>
-        <figure class="sl" data-cap="Ответ одной строкой «↩ @ник», вас отметили — красная строка с кромкой; награды за баллы и первое сообщение — как в 7TV"><img src="screenshot_replies2.png" alt="Лента крупно: ответ одной строкой, красное упоминание, награда за баллы, первое сообщение"><img class="bg" src="screenshot_replies2.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl" data-cap="Ответ одной строкой «↩ @ник», вас отметили — красная строка; покупка награды — строкой в цвет награды, даже без текста"><img src="screenshot_replies3.png" alt="Лента крупно: ответ одной строкой, красное упоминание, награда с текстом, покупка награды без текста, первое сообщение"><img class="bg" src="screenshot_replies3.png" alt="" aria-hidden="true"></figure>
         <figure class="sl" data-cap="«+» за вкладками: ссылка из буфера обмена уже вставлена — Enter, и чат открыт; избранное — в один клик"><img src="screenshot_add.png" alt="Окно добавления чата: вставленная ссылка на попаут-чат и избранные каналы"><img class="bg" src="screenshot_add.png" alt="" aria-hidden="true"></figure>
         <figure class="sl" data-cap="F10 — колонками только те, кто в эфире: «в эфире 3 из 4», у оффлайн-канала колонки нет"><img src="screenshot_multichat2.png" alt="Развёрнутый мультичат: три колонки живых каналов"><img class="bg" src="screenshot_multichat2.png" alt="" aria-hidden="true"></figure>
         <figure class="sl" data-cap="F9 — только текст поверх игры: время, ответы и упоминания видны и тут"><img src="screenshot_textonly3.png" alt="Режим «только текст»: чат парит без рамки и фона"><img class="bg" src="screenshot_textonly3.png" alt="" aria-hidden="true"></figure>
@@ -376,6 +377,7 @@
     "<span class='sys'>kotleta подписался на 3 месяца!</span>",
     MODI + VIP + nick("#a970ff", "vip_persona") + "нажал + и вставил ссылку — чат открылся вкладкой",
     nick("#5c9dff", "quiet_boi") + "прокрутил вверх — чат встал на паузу, удобно",
+    "<span class='rwi rdi'></span><span class='nick' style='color:#34c9ae'>rave100</span> забирает награду <b>«Выпить воды»</b> <span class='pts'></span>500",
     "<div class='hdr rw'><span class='rwi'></span>dancer забирает награду «музыка» · <span class='pts'></span>150</div>" + nick("#ff69b4", "dancer") + "<span class='ln'>youtu.be/bP4piK-uR8k</span>",
     MODI + nick("#5c9dff", "quiet_boi") + "клик по нику открывает профиль " + ALIEN,
     nick("#57d964", "modzilla") + "F10 открыл только тех, кто в эфире <b style='color:#eb0400'>●</b>",
@@ -390,7 +392,7 @@
     var html = POOL[i % POOL.length];
     li.innerHTML = html;
     // время отправки — перед значками и ником, как в оверлее
-    var anchor = li.querySelector(".mi, img.badge, .nick");
+    var anchor = li.querySelector(".mi, img.badge, .rdi, .nick");
     if (anchor) {
       var d = new Date(), t = document.createElement("span");
       t.className = "ts";
@@ -399,6 +401,7 @@
     }
     if (html.indexOf("class='mn'") > -1) li.className = "mn";
     if (html.indexOf("class='hdr rw'") > -1) li.className = "rw";
+    if (html.indexOf("class='rwi rdi'") > -1) li.className = "rdm";
     if (html.indexOf("class='fl'") > -1) li.className = "first";
     if (html.indexOf("class='al'") > -1) li.className = "ann";
     feed.appendChild(li);
