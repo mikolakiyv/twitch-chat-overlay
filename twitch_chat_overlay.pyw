@@ -672,7 +672,7 @@ GQL_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"  # публичный client-id
 TOKEN_SITE = "https://twitchtokengenerator.com/"
 AUTHOR = "aliveenjoyer"
 AUTHOR_URL = "https://twitch.tv/aliveenjoyer"
-DONATE_URL = "https://www.donationalerts.com/r/nihaoenjoyer"
+DONATE_URL = "https://www.donationalerts.com/r/aliveenjoyer"
 
 SEVENTV_CACHE_DIR = os.path.join(APP_DIR, ".7tv_cache")
 

@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-9147ff.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
 ![Python](https://img.shields.io/badge/Python-3.8%2B-3776ab)
-[![Support](https://img.shields.io/badge/💜-DonationAlerts-ff69b4)](https://www.donationalerts.com/r/nihaoenjoyer)
+[![Support](https://img.shields.io/badge/💜-DonationAlerts-ff69b4)](https://www.donationalerts.com/r/aliveenjoyer)
 
 *by [aliveenjoyer](https://twitch.tv/aliveenjoyer)*
 
