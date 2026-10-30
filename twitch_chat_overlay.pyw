@@ -22,6 +22,7 @@ import calendar
 import ctypes
 import hashlib
 import json
+import math
 import os
 import queue
 import random
@@ -37,6 +38,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 import zlib
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, wait as futures_wait
 import tkinter as tk
 from tkinter import font as tkfont
@@ -47,9 +49,16 @@ try:
     import io as _io
     from PIL import Image as _PILImage
     from PIL import ImageDraw as _PILDraw
+    from PIL import ImageChops as _PILChops
+    from PIL import ImageFilter as _PILFilter
+    from PIL import ImageFont as _PILFont
     HAS_PIL = True
 except Exception:
     HAS_PIL = False
+try:
+    from PIL import ImageTk as _PILImageTk   # картинки в Tk напрямую, без PNG
+except Exception:
+    _PILImageTk = None
 
 if getattr(sys, "frozen", False):
     # собрано в .exe (PyInstaller): настройки и кэш держим рядом с exe
@@ -57,7 +66,7 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "overlay_config.json")
-APP_VERSION = "1.20.0"
+APP_VERSION = "1.21.0"
 GITHUB_REPO = "mikolakiyv/twitch-chat-overlay"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 # файл самой программы: exe или .pyw — обновление подменяет именно его
@@ -75,7 +84,8 @@ PALETTES = {
                    select="#4a4740", grip="#6b665d", btnfg="#cac5bb",
                    slider_track="#cfc8ba", slider_knob="#f6f2e9", reward="#33322c",
                    first_bg="#3a2a31", first_fg="#e88aa8",
-                   tabbar="#191816", tab_on="#35322d", ts="#85807a", link="#8fb3e6"),
+                   tabbar="#191816", tab_on="#35322d", ts="#85807a", link="#8fb3e6",
+                   card="#2f2e2a", switch_off="#57544c"),
     # как чат Twitch с 7TV: тёмная лента, бордовые упоминания с кромкой
     "twitch": dict(bg="#111317", bar="#1f2029", border="#34353f", fg="#efeff1",
                    sys="#9d9cab", chip="#a6a6ae", accent="#9147ff",
@@ -85,7 +95,8 @@ PALETTES = {
                    select="#3d3e4c", grip="#5d5e6a", btnfg="#cfcfd6",
                    slider_track="#c9cbd6", slider_knob="#f4f4f8", reward="#232533",
                    first_bg="#2e1e2b", first_fg="#ff6fb4",
-                   tabbar="#0e0e10", tab_on="#29253f", ts="#75747f", link="#7aa2e8"),
+                   tabbar="#0e0e10", tab_on="#29253f", ts="#75747f", link="#7aa2e8",
+                   card="#1a1b22", switch_off="#3b3d4a"),
 }
 
 
@@ -94,8 +105,10 @@ def apply_palette(name):
     global BG, BAR_BG, BORDER, FG, SYS_FG, CHIP_FG, ACCENT, ACCENT_HOVER
     global ACCENT_ACTIVE, MENTION_BG, ENTRY_BG, CHIPBTN_BG, SELECT_BG, GRIP_FG, BTN_FG
     global SLIDER_TRACK, SLIDER_KNOB, REWARD_BG, FIRST_BG, FIRST_FG
-    global MENTION_EDGE, HL_BG, TABBAR_BG, TAB_ON, TS_FG, LINK_FG
+    global MENTION_EDGE, HL_BG, TABBAR_BG, TAB_ON, TS_FG, LINK_FG, CARD_BG, SWITCH_OFF
     p = PALETTES.get(name) or PALETTES["claude"]
+    CARD_BG = p["card"]
+    SWITCH_OFF = p["switch_off"]
     REWARD_BG = p["reward"]
     MENTION_EDGE = p["mention_edge"]
     HL_BG = p["hl_bg"]
@@ -207,6 +220,30 @@ def dwm_border(widget, hide):
         pass
 
 
+def dwm_dark_title(widget):
+    """Тёмный системный заголовок окна (Windows 10 2004+ / 11), под тёмную тему."""
+    try:
+        hwnd = ctypes.windll.user32.GetAncestor(widget.winfo_id(), 2)
+        on = ctypes.c_int(1)
+        for attr in (20, 19):   # DWMWA_USE_IMMERSIVE_DARK_MODE (и старый номер)
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(on), 4) == 0:
+                break
+    except Exception:
+        pass
+
+
+def dwm_corners(widget, rounded):
+    """Скругление углов окна (Windows 11). Вместе со скруглением DWM рисует и мягкую
+    серую тень — в прозрачных режимах она видна вокруг чата как рамка, поэтому там
+    углы прямые (DWMWCP_DONOTROUND = 1, DWMWCP_ROUND = 2)."""
+    try:
+        hwnd = ctypes.windll.user32.GetAncestor(widget.winfo_id(), 2)
+        pref = ctypes.c_int(2 if rounded else 1)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), 4)
+    except Exception:
+        pass
+
+
 def dwm_round(widget, small=False):
     """Скругляет углы окна средствами Windows 11 (на Windows 10 просто игнор)."""
     try:
@@ -257,6 +294,9 @@ DEFAULTS = {
     "auto_update": True,
     "chan_avatars": True,
     "timestamps": True,
+    "tr_outline": "thin",   # текст в прозрачном режиме: none / thin / bold / shadow
+    "tr_bg": 0,             # полупрозрачная подложка под чатом, % (0 — нет)
+    "font_family": "",      # шрифт чата; "" — авто (Roobert / Inter / Segoe UI)
     "key_clickthrough": {"vk": 119, "name": "F8"},
     "key_frameless": {"vk": 120, "name": "F9"},
     "key_expand": {"vk": 121, "name": "F10"},
@@ -309,6 +349,45 @@ STRINGS = {
         "s_account": "Аккаунт",
         "s_mention": "Упоминания (@ник)",
         "s_modes": "РЕЖИМЫ",
+        "card_channels": "Каналы",
+        "card_window": "Окно и режимы",
+        "card_account": "Аккаунт",
+        "card_look": "Внешний вид",
+        "card_transp": "Прозрачный режим",
+        "card_feed": "Лента",
+        "lbl_size": "Размер текста",
+        "lbl_outline": "Обводка",
+        "lbl_backdrop": "Подложка",
+        "lay_feed": "Лента",
+        "transp_hint": "Как выглядит чат в F9, Insert и с прозрачным фоном",
+        "fav_add": "★ в избранное",
+        "lbl_lang": "Язык",
+        "fav_add_tt": "Добавить открытые каналы в избранное",
+        "set_save": "＋ сохранить",
+        "set_save_tt": "Сохранить открытые каналы как набор",
+        "fav_toggle_tt": "Клик — открыть или закрыть чат, ✕ — убрать из избранного",
+        "fav_none": "Пока пусто",
+        "key_tt": "Клик — назначить другую клавишу",
+        "acc_as": "Вы вошли как",
+        "acc_hint": "Войдите, чтобы писать в чат",
+        "mention_lbl": "Мой ник",
+        "mention_tt": "Сообщения с этим ником подсвечиваются красным",
+        "mention_hint": "С этим ником сообщения подсвечиваются красным",
+        "chan_ph": "каналы через запятую",
+        "upd_short": "Проверить",
+        "s_transp": "ПРОЗРАЧНЫЙ РЕЖИМ",
+        "s_transp_hint": "Для «Прозрачный фон», F9 и Insert: как выглядит текст поверх игры",
+        "s_outline": "Обводка текста",
+        "ol_none": "Нет",
+        "ol_thin": "Тонкая",
+        "ol_bold": "Толстая",
+        "ol_shadow": "Тень",
+        "s_trbg": "Фон под чатом",
+        "s_font": "Шрифт",
+        "font_auto": "Авто",
+        "s_extras_tt": "Ответы, награды за баллы и первые сообщения — как на Twitch",
+        "s_autoupd_tt": "Новые версии скачиваются в фоне и ставятся при следующем запуске",
+        "s_avatars_tt": "Аватарки каналов в общей ленте и в совместном чате",
         "s_appear": "ВНЕШНИЙ ВИД",
         "s_textonly": "Только текст чата",
         "s_click": "Сквозные клики",
@@ -338,11 +417,11 @@ STRINGS = {
         "act_warn": "Предупредить",
         "act_ban": "Забанить",
         "act_ban_confirm": "Точно забанить?",
-        "s_modicons": "Кнопки модерации в чате",
-        "s_extras": "Ответы, награды, первые сообщения",
+        "s_modicons": "Кнопки модерации",
+        "s_extras": "Ответы и награды",
         "first_msg": "ПЕРВОЕ СООБЩЕНИЕ",
-        "s_autoupd": "Автообновление (скачивать новые версии в фоне)",
-        "s_avatars": "Иконки каналов в ленте (как в Twitch)",
+        "s_autoupd": "Автообновление",
+        "s_avatars": "Иконки каналов",
         "upd_check": "Проверить обновления",
         "upd_avail": "Доступна версия %s — нажмите ⟳ в шапке, чтобы обновиться",
         "upd_downloading": "Скачиваю обновление %s…",
@@ -489,6 +568,45 @@ STRINGS = {
         "s_account": "Account",
         "s_mention": "Mentions (@name)",
         "s_modes": "MODES",
+        "card_channels": "Channels",
+        "card_window": "Window & modes",
+        "card_account": "Account",
+        "card_look": "Appearance",
+        "card_transp": "Transparent mode",
+        "card_feed": "Feed",
+        "lbl_size": "Text size",
+        "lbl_outline": "Outline",
+        "lbl_backdrop": "Backdrop",
+        "lay_feed": "Feed",
+        "transp_hint": "How chat looks in F9, Insert and with a transparent background",
+        "fav_add": "★ favorite",
+        "lbl_lang": "Language",
+        "fav_add_tt": "Add the open channels to favorites",
+        "set_save": "＋ save",
+        "set_save_tt": "Save the open channels as a set",
+        "fav_toggle_tt": "Click to open or close the chat, ✕ to remove from favorites",
+        "fav_none": "Empty for now",
+        "key_tt": "Click to choose another key",
+        "acc_as": "Signed in as",
+        "acc_hint": "Sign in to send messages",
+        "mention_lbl": "My name",
+        "mention_tt": "Messages with this name are highlighted in red",
+        "mention_hint": "Messages with this name are highlighted in red",
+        "chan_ph": "channels, comma-separated",
+        "upd_short": "Check",
+        "s_transp": "TRANSPARENT MODE",
+        "s_transp_hint": "For transparent background, F9 and Insert: how text looks over the game",
+        "s_outline": "Text outline",
+        "ol_none": "None",
+        "ol_thin": "Thin",
+        "ol_bold": "Bold",
+        "ol_shadow": "Shadow",
+        "s_trbg": "Chat backdrop",
+        "s_font": "Font",
+        "font_auto": "Auto",
+        "s_extras_tt": "Replies, channel point rewards and first messages — like on Twitch",
+        "s_autoupd_tt": "New versions download in the background and install on next launch",
+        "s_avatars_tt": "Channel avatars in the combined feed and in shared chat",
         "s_appear": "APPEARANCE",
         "s_textonly": "Text-only chat",
         "s_click": "Click-through",
@@ -518,11 +636,11 @@ STRINGS = {
         "act_warn": "Warn",
         "act_ban": "Ban",
         "act_ban_confirm": "Really ban?",
-        "s_modicons": "Mod buttons in chat",
-        "s_extras": "Replies, rewards, first messages",
+        "s_modicons": "Mod buttons",
+        "s_extras": "Replies & rewards",
         "first_msg": "FIRST MESSAGE",
-        "s_autoupd": "Auto-update (download new versions in background)",
-        "s_avatars": "Channel avatars in the feed (like Twitch)",
+        "s_autoupd": "Auto-update",
+        "s_avatars": "Channel avatars",
         "upd_check": "Check for updates",
         "upd_avail": "Version %s is available — click ⟳ in the title bar to update",
         "upd_downloading": "Downloading update %s…",
@@ -843,6 +961,14 @@ def load_config():
         v = cfg.get(key)
         if not (isinstance(v, dict) and isinstance(v.get("vk"), int) and v.get("name")):
             cfg[key] = dict(default)
+    if cfg.get("tr_outline") not in ("none", "thin", "bold", "shadow"):
+        cfg["tr_outline"] = DEFAULTS["tr_outline"]
+    try:
+        cfg["tr_bg"] = max(0, min(90, int(cfg.get("tr_bg") or 0)))
+    except (TypeError, ValueError):
+        cfg["tr_bg"] = 0
+    if not isinstance(cfg.get("font_family"), str):
+        cfg["font_family"] = ""
     # F7 конфликтовала с браузерами (caret browsing) — старый дефолт мигрируем
     if cfg.get("key_ghostinput") == {"vk": 118, "name": "F7"}:
         cfg["key_ghostinput"] = dict(DEFAULTS["key_ghostinput"])
@@ -1689,6 +1815,379 @@ def helix(method, path, token, client_id, params=None, body=None):
 
 # ---------------------------------------------------------------- IRC поток
 
+FONTS_DIR = os.path.join(os.environ.get("WINDIR") or r"C:\Windows", "Fonts")
+# шрифты на выбор в настройках — показываются только установленные
+FONT_CHOICES = ("Segoe UI", "Inter", "Roboto", "Montserrat", "Open Sans", "Arial", "Verdana",
+                "Tahoma", "Trebuchet MS", "Calibri", "Bahnschrift", "Consolas", "Comic Sans MS")
+_FONT_FILES = None
+
+
+def font_files():
+    """Установленные шрифты из реестра: имя в нижнем регистре -> путь к файлу."""
+    global _FONT_FILES
+    if _FONT_FILES is not None:
+        return _FONT_FILES
+    found = {}
+    try:
+        import winreg
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                key = winreg.OpenKey(hive, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts")
+            except OSError:
+                continue
+            i = 0
+            while True:
+                try:
+                    name, value, _ = winreg.EnumValue(key, i)
+                except OSError:
+                    break
+                i += 1
+                if not isinstance(value, str):
+                    continue
+                path = value if os.path.isabs(value) else os.path.join(FONTS_DIR, value)
+                name = re.sub(r"\s*\((TrueType|OpenType)\)\s*$", "", name, flags=re.I)
+                for part in name.split("&"):
+                    found.setdefault(part.strip().lower(), path)
+    except Exception as e:
+        dbg("! fonts:", e)
+    _FONT_FILES = found
+    return found
+
+
+def pil_font_spec(family, bold=False, italic=False):
+    """(файл, имя варианта) шрифта для Pillow по семейству Tk; запасной — Segoe UI.
+
+    Переменные шрифты Windows показывает как отдельные семейства
+    («Bahnschrift SemiBold»), а в реестре у них один файл — тогда вариант
+    выбирается по имени."""
+    files = font_files()
+    suffix = (" bold" if bold else "") + (" italic" if italic else "")
+    wanted = ((family or "").strip() + suffix).lower()
+    path = files.get(wanted)
+    if path and os.path.isfile(path):
+        return path, None
+    words = wanted.split()
+    for n in range(len(words) - 1, 0, -1):
+        path = files.get(" ".join(words[:n]))
+        if path and os.path.isfile(path):
+            return path, " ".join(words[n:])
+    for name in ("segoe ui" + suffix, "segoe ui"):
+        path = files.get(name)
+        if path and os.path.isfile(path):
+            return path, None
+    return os.path.join(FONTS_DIR, "segoeui.ttf"), None
+
+
+_SYMBOL_SPEC = (os.path.join(FONTS_DIR, "seguisym.ttf"), None)
+_EMOJI_SPEC = (os.path.join(FONTS_DIR, "seguiemj.ttf"), None)
+# невидимые служебные символы эмодзи: Pillow без сложной раскладки рисует их квадратиками
+_INVISIBLE = {0x200D: None, 0xFE0E: None, 0xFE0F: None, 0x200B: None}
+
+
+class OutlineText:
+    """Слова-картинки для прозрачного режима: текст с обводкой или тенью рисует Pillow.
+
+    Tk сглаживает буквы по цвету фона, а в прозрачном режиме фон — цвет-ключ, который
+    Windows вырезает: края букв остаются тёмными полупикселями, и на светлом фоне
+    текст выглядит рваным. У картинки своя альфа и тёмная обводка — она читается на
+    любом фоне. Каждое слово — отдельная картинка, поэтому перенос строк, теги, клики
+    по никам и скрытие времени работают как с обычным текстом."""
+
+    STYLES = {"thin": (1, False), "bold": (2, False), "shadow": (0, True)}
+
+    def __init__(self, master, style, asc, desc):
+        """asc/desc — метрики основного шрифта Tk: картинка ровно на ow выше и ниже
+        строки, и при выравнивании по центру её базовая линия совпадает с текстом Tk."""
+        self.master = master
+        self.ow, self.shadow = self.STYLES.get(style, (1, False))
+        self.pad = self.ow + (2 if self.shadow else 0)
+        self.asc, self.desc = asc, desc
+        self._fonts = {}
+        self._cover = {}
+        self._notdef = {}
+        self.cache = LruDict(1500)
+
+    def font(self, spec, px):
+        key = (spec, px)
+        if key not in self._fonts:
+            path, var = spec
+            f = None
+            try:
+                f = _PILFont.truetype(path, px)
+                if var:
+                    names = [n.decode("utf-8", "replace") if isinstance(n, bytes) else str(n)
+                             for n in f.get_variation_names()]
+                    pick = next((n for n in names if n.lower() == var.lower()), None)
+                    if pick:
+                        f.set_variation_by_name(pick)
+            except Exception:
+                pass
+            self._fonts[key] = f
+        return self._fonts[key]
+
+    @staticmethod
+    def _sig(f, ch):
+        try:
+            m = f.getmask(ch)
+            return m.size, bytes(m)
+        except Exception:
+            return None
+
+    def _has(self, f, fkey, ch):
+        k = (fkey, ch)
+        v = self._cover.get(k)
+        if v is None:
+            if fkey not in self._notdef:
+                self._notdef[fkey] = self._sig(f, chr(0xF0000))   # заведомо пустой символ
+            v = ch == " " or self._sig(f, ch) != self._notdef[fkey]
+            self._cover[k] = v
+        return v
+
+    def runs(self, text, spec, px):
+        """Режет текст на куски по шрифтам: основной, Segoe UI Symbol, цветные эмодзи.
+        Эмодзи (и символы с U+FE0F) — сначала цветным шрифтом, иначе Symbol нарисует их
+        одноцветными. None — есть символ, которого нет ни в одном шрифте."""
+        fonts = []
+        for fs, emo in ((spec, False), (_SYMBOL_SPEC, False), (_EMOJI_SPEC, True)):
+            f = self.font(fs, px)
+            if f is not None:
+                fonts.append(((fs, px), f, emo))
+        emoji_first = [x for x in fonts if x[2]] + [x for x in fonts if not x[2]]
+        chars = []
+        for ch in text:
+            cp = ord(ch)
+            if cp in _INVISIBLE:
+                if cp == 0xFE0F and chars:
+                    chars[-1][1] = True
+                continue
+            chars.append([ch, cp >= 0x1F000])
+        out = []
+        for ch, emo_pref in chars:
+            for fkey, f, emo in (emoji_first if emo_pref else fonts):
+                if self._has(f, fkey, ch):
+                    break
+            else:
+                return None
+            if out and out[-1][1] is f:
+                out[-1][0] += ch
+            else:
+                out.append([ch, f, emo])
+        return out
+
+    def image(self, text, fg, spec, px, italic=False, lpad=True, rpad=True):
+        return self.image_parts(((text, fg, spec, px),), italic, lpad, rpad)
+
+    def image_parts(self, parts, italic=False, lpad=True, rpad=True):
+        """Картинка из кусков разного цвета/шрифта (ник и двоеточие — одной картинкой).
+        lpad/rpad — поля по краям; у кусков длинного слова внутренних полей нет."""
+        key = (tuple(parts), italic, lpad, rpad)
+        img = self.cache.get(key)
+        if img is not None:
+            return img
+        pieces = []
+        for text, fg, spec, px in parts:
+            runs = self.runs(text, spec, px) if text else []
+            if runs is None:
+                return None
+            try:
+                rgb = _hex_to_rgb(fg) + (255,)
+            except Exception:
+                rgb = (239, 239, 241, 255)
+            for t, f, emo in runs:
+                pieces.append((t, f, emo, rgb, f.getlength(t)))
+        if not pieces:
+            return None
+        pad = self.pad
+        lp, rp = (pad if lpad else 0), (pad if rpad else 0)
+        W = int(math.ceil(sum(p[4] for p in pieces))) + lp + rp
+        if italic:
+            W += int(parts[0][3] * 0.2)
+        H = self.asc + self.desc + 2 * pad
+        y = pad + self.asc
+        im = _PILImage.new("RGBA", (max(1, W), H), (0, 0, 0, 0))
+        d = _PILDraw.Draw(im)
+        if self.shadow:
+            # чёткая тень вправо-вниз: размытая не годится — цвет-ключ любую неполную
+            # прозрачность делает тёмной, и за словами появлялись плашки
+            x = lp
+            for t, f, emo, rgb, wd in pieces:
+                if not emo:
+                    for off in (2, 1):
+                        d.text((x + off, y + off), t, font=f, anchor="ls", fill=(0, 0, 0, 255))
+                x += wd
+        # тонкая обводка — расширенной маской букв: вдвое быстрее контура FreeType, а на
+        # глаз то же самое; у толстой оставляем FreeType — у неё скруглённые углы
+        dilate = self.ow == 1
+        top = _PILImage.new("RGBA", im.size, (0, 0, 0, 0)) if dilate else im
+        dt = _PILDraw.Draw(top)
+        x = lp
+        for t, f, emo, rgb, wd in pieces:
+            if not emo:
+                dt.text((x, y), t, font=f, anchor="ls", fill=rgb,
+                        stroke_width=0 if dilate else self.ow, stroke_fill=(0, 0, 0, 255))
+            x += wd
+        if dilate:
+            im = _PILImage.new("RGBA", im.size, (0, 0, 0, 255))
+            im.putalpha(top.getchannel("A").filter(_PILFilter.MaxFilter(3)))
+            im.alpha_composite(top)
+            d = _PILDraw.Draw(im)
+        x = lp
+        for t, f, emo, rgb, wd in pieces:   # цветные эмодзи — без обводки, поверх
+            if emo:
+                d.text((x, y), t, font=f, anchor="ls", embedded_color=True)
+            x += wd
+        img = self._to_tk(im)
+        if img is not None:
+            self.cache.put(key, img)
+        return img
+
+    _direct = True   # ImageTk сработал; если нет — дальше через PNG
+
+    def _to_tk(self, im):
+        if OutlineText._direct and _PILImageTk is not None:
+            try:
+                return _PILImageTk.PhotoImage(im, master=self.master)
+            except Exception:
+                OutlineText._direct = False
+        buf = _io.BytesIO()
+        im.save(buf, "PNG", compress_level=1)
+        try:
+            return tk.PhotoImage(master=self.master, data=base64.b64encode(buf.getvalue()))
+        except tk.TclError:
+            return None
+
+
+class _BLENDFUNC(ctypes.Structure):
+    _fields_ = [("op", ctypes.c_ubyte), ("flags", ctypes.c_ubyte),
+                ("alpha", ctypes.c_ubyte), ("fmt", ctypes.c_ubyte)]
+
+
+class _BMIHEADER(ctypes.Structure):
+    _fields_ = [("biSize", ctypes.c_uint32), ("biWidth", ctypes.c_int32), ("biHeight", ctypes.c_int32),
+                ("biPlanes", ctypes.c_uint16), ("biBitCount", ctypes.c_uint16),
+                ("biCompression", ctypes.c_uint32), ("biSizeImage", ctypes.c_uint32),
+                ("biXPelsPerMeter", ctypes.c_int32), ("biYPelsPerMeter", ctypes.c_int32),
+                ("biClrUsed", ctypes.c_uint32), ("biClrImportant", ctypes.c_uint32)]
+
+
+class Backdrop:
+    """Полупрозрачная подложка под прозрачным чатом: отдельное «слоёное» окно Windows с
+    попиксельной альфой (UpdateLayeredWindow). Tk так не умеет — у его окна прозрачность
+    одна на всё окно, и вместе с фоном бледнел бы текст. Текст остаётся в основном окне
+    непрозрачным, а подложка лежит прямо под ним; мышь проходит сквозь неё."""
+
+    def __init__(self):
+        self.hwnd = None
+        self.shape = None
+        self.pos = None
+        self.visible = False
+        u32, g32 = ctypes.windll.user32, ctypes.windll.gdi32
+        vp, i32, u32t = ctypes.c_void_p, ctypes.c_int, ctypes.c_uint32
+        u32.CreateWindowExW.restype = vp
+        u32.CreateWindowExW.argtypes = [u32t, ctypes.c_wchar_p, ctypes.c_wchar_p, u32t,
+                                        i32, i32, i32, i32, vp, vp, vp, vp]
+        u32.SetWindowPos.argtypes = [vp, vp, i32, i32, i32, i32, ctypes.c_uint]
+        u32.ShowWindow.argtypes = [vp, i32]
+        u32.DestroyWindow.argtypes = [vp]
+        u32.GetDC.restype = vp
+        u32.GetDC.argtypes = [vp]
+        u32.ReleaseDC.argtypes = [vp, vp]
+        u32.UpdateLayeredWindow.argtypes = [vp, vp, vp, vp, vp, vp, u32t, vp, u32t]
+        g32.CreateCompatibleDC.restype = vp
+        g32.CreateCompatibleDC.argtypes = [vp]
+        g32.CreateDIBSection.restype = vp
+        g32.CreateDIBSection.argtypes = [vp, vp, ctypes.c_uint, ctypes.POINTER(vp), vp, u32t]
+        g32.SelectObject.restype = vp
+        g32.SelectObject.argtypes = [vp, vp]
+        g32.DeleteObject.argtypes = [vp]
+        g32.DeleteDC.argtypes = [vp]
+        self.u32, self.g32 = u32, g32
+
+    def _ensure(self):
+        if self.hwnd:
+            return True
+        # WS_EX_LAYERED | WS_EX_TRANSPARENT (мышь насквозь) | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+        self.hwnd = self.u32.CreateWindowExW(0x80000 | 0x20 | 0x80 | 0x8000000, "STATIC", "",
+                                             0x80000000, 0, 0, 1, 1, None, None, None, None)
+        return bool(self.hwnd)
+
+    @staticmethod
+    def render(shape):
+        w, h, alpha, pills, radius, color = shape
+        S = 2   # рисуем вдвое крупнее и уменьшаем — так скругления гладкие
+        im = _PILImage.new("RGBA", (w * S, h * S), (0, 0, 0, 0))
+        d = _PILDraw.Draw(im)
+        a = int(255 * alpha / 100)
+        if a > 0:
+            d.rounded_rectangle((0, 0, w * S - 1, h * S - 1), radius=radius * S, fill=color + (a,))
+        pa = max(205, min(235, a + 120))   # таблетки ввода темнее фона: текст в них читается и на белом
+        for kind, x, y, pw, ph in pills:
+            box = (x * S, y * S, (x + pw) * S - 1, (y + ph) * S - 1)
+            if kind == "dot":
+                d.ellipse(box, fill=color + (pa,))
+            else:
+                d.rounded_rectangle(box, radius=ph * S // 2, fill=color + (pa,))
+        return im.resize((w, h), _PILImage.LANCZOS)
+
+    def _push(self, img, x, y):
+        w, h = img.size
+        r, g, b, a = img.split()
+        # Windows ждёт BGRA с цветом, уже умноженным на альфу
+        data = _PILImage.merge("RGBA", (_PILChops.multiply(b, a), _PILChops.multiply(g, a),
+                                        _PILChops.multiply(r, a), a)).tobytes()
+        sdc = self.u32.GetDC(None)
+        mdc = self.g32.CreateCompatibleDC(sdc)
+        bmi = _BMIHEADER(ctypes.sizeof(_BMIHEADER), w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
+        bits = ctypes.c_void_p()
+        hbmp = self.g32.CreateDIBSection(sdc, ctypes.byref(bmi), 0, ctypes.byref(bits), None, 0)
+        ok = False
+        if hbmp and bits.value:
+            ctypes.memmove(bits, data, len(data))
+            old = self.g32.SelectObject(mdc, hbmp)
+            pt, size, src = (ctypes.c_long * 2)(x, y), (ctypes.c_long * 2)(w, h), (ctypes.c_long * 2)(0, 0)
+            blend = _BLENDFUNC(0, 0, 255, 1)   # AC_SRC_OVER, своя альфа (AC_SRC_ALPHA)
+            ok = bool(self.u32.UpdateLayeredWindow(self.hwnd, sdc, ctypes.byref(pt), ctypes.byref(size),
+                                                   mdc, ctypes.byref(src), 0, ctypes.byref(blend), 2))
+            self.g32.SelectObject(mdc, old)
+            self.g32.DeleteObject(hbmp)
+        self.g32.DeleteDC(mdc)
+        self.u32.ReleaseDC(None, sdc)
+        return ok
+
+    def show(self, shape, x, y):
+        if not self._ensure():
+            return
+        if shape != self.shape:
+            if self._push(self.render(shape), x, y):
+                self.shape, self.pos = shape, (x, y)
+        elif (x, y) != self.pos:
+            # SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+            self.u32.SetWindowPos(self.hwnd, None, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010)
+            self.pos = (x, y)
+        if not self.visible:
+            self.u32.ShowWindow(self.hwnd, 4)   # SW_SHOWNOACTIVATE
+            self.visible = True
+
+    def place_below(self, main_hwnd, topmost):
+        """Ровно под окном чата: сначала в нужный «слой» (поверх всех или нет), потом под него."""
+        if not self.hwnd or not self.visible:
+            return
+        flags = 0x0001 | 0x0002 | 0x0010   # NOSIZE | NOMOVE | NOACTIVATE
+        self.u32.SetWindowPos(self.hwnd, ctypes.c_void_p(-1 if topmost else -2), 0, 0, 0, 0, flags)
+        self.u32.SetWindowPos(self.hwnd, ctypes.c_void_p(main_hwnd), 0, 0, 0, 0, flags)
+
+    def hide(self):
+        if self.hwnd and self.visible:
+            self.u32.ShowWindow(self.hwnd, 0)
+            self.visible = False
+
+    def destroy(self):
+        if self.hwnd:
+            self.u32.DestroyWindow(self.hwnd)
+            self.hwnd = None
+            self.visible = False
+
+
 def _iso_to_epoch(s):
     """'2026-10-12T11:07:58.8008Z' -> unix-время; при ошибке — сейчас."""
     try:
@@ -2469,6 +2968,184 @@ class RoundSlider(tk.Canvas):
         self._draw()
 
 
+def _round_rect(cv, x0, y0, x1, y1, r, fill, tag):
+    """Скруглённый прямоугольник на канвасе (фон карточки)."""
+    r = max(0, min(r, (x1 - x0) // 2, (y1 - y0) // 2))
+    cv.create_rectangle(x0 + r, y0, x1 - r, y1, fill=fill, outline=fill, tags=tag)
+    cv.create_rectangle(x0, y0 + r, x1, y1 - r, fill=fill, outline=fill, tags=tag)
+    for cx, cy in ((x0, y0), (x1 - 2 * r, y0), (x0, y1 - 2 * r), (x1 - 2 * r, y1 - 2 * r)):
+        cv.create_oval(cx, cy, cx + 2 * r, cy + 2 * r, fill=fill, outline=fill, tags=tag)
+
+
+class Card(tk.Canvas):
+    """Карточка настроек: скруглённый фон, заголовок; содержимое — в self.body."""
+
+    def __init__(self, parent, title, scale=1.0):
+        super().__init__(parent, bg=BG, highlightthickness=0, bd=0)
+        self.r = int(round(10 * scale))
+        self.px, self.py = int(round(14 * scale)), int(round(9 * scale))
+        self.body = tk.Frame(self, bg=CARD_BG)
+        if title:
+            tk.Label(self.body, text=title, bg=CARD_BG, fg=FG, font=("Segoe UI Semibold", 10),
+                     anchor="w").pack(fill="x", pady=(0, int(round(3 * scale))))
+        self._win = self.create_window(self.px, self.py, window=self.body, anchor="nw")
+        self.body.bind("<Configure>", self._fit, add="+")
+        self.bind("<Configure>", self._fit, add="+")
+
+    def _fit(self, event=None):
+        bw, bh = self.body.winfo_reqwidth(), self.body.winfo_reqheight()
+        need_w, H = bw + 2 * self.px, bh + 2 * self.py
+        if int(self.cget("height")) != H:
+            self.configure(height=H)
+        if int(self.cget("width")) < need_w:
+            self.configure(width=need_w)
+        W = max(self.winfo_width(), need_w)
+        self.itemconfigure(self._win, width=W - 2 * self.px)
+        self.delete("bg")
+        # последняя карточка колонки растянута до низа — фон на всю её высоту
+        _round_rect(self, 0, 0, W, max(H, self.winfo_height()), self.r, CARD_BG, "bg")
+        self.tag_lower("bg")
+
+
+_SWITCH_IMGS = {}
+
+
+class ToggleSwitch(tk.Canvas):
+    """Тумблер вместо галочки: переключает BooleanVar и следит за ним сам
+    (сменили режим горячей клавишей — тумблер тоже переключится)."""
+
+    def __init__(self, parent, variable, command=None, bg=None, scale=1.0):
+        self.W, self.H = int(round(34 * scale)), int(round(20 * scale))
+        super().__init__(parent, width=self.W, height=self.H, bg=bg or CARD_BG,
+                         highlightthickness=0, bd=0, cursor="hand2")
+        self.var, self.command, self.bgc = variable, command, bg or CARD_BG
+        self.bind("<Button-1>", lambda e: self.toggle())
+        self._tid = variable.trace_add("write", lambda *a: self._draw())
+        self.bind("<Destroy>", self._untrace, add="+")
+        self._draw()
+
+    def _untrace(self, event=None):
+        try:
+            self.var.trace_remove("write", self._tid)
+        except Exception:
+            pass
+
+    def _images(self):
+        """Гладкие картинки тумблера (Pillow, с запасом по размеру) — выкл/вкл."""
+        key = (self.W, self.H, ACCENT, SWITCH_OFF, self.bgc)
+        imgs = _SWITCH_IMGS.get(key)
+        if imgs is None and HAS_PIL:
+            imgs = []
+            S = 4
+            W, H = self.W * S, self.H * S
+            m = int(round(H * 0.15))
+            for on in (False, True):
+                im = _PILImage.new("RGB", (W, H), _hex_to_rgb(self.bgc))
+                d = _PILDraw.Draw(im)
+                d.rounded_rectangle((0, 0, W - 1, H - 1), radius=H // 2,
+                                    fill=_hex_to_rgb(ACCENT if on else SWITCH_OFF))
+                k = H - 2 * m
+                x = W - m - k if on else m
+                d.ellipse((x, m, x + k, m + k), fill=(255, 255, 255))
+                im = im.resize((self.W, self.H), _PILImage.LANCZOS)
+                buf = _io.BytesIO()
+                im.save(buf, "PNG")
+                imgs.append(tk.PhotoImage(master=self, data=base64.b64encode(buf.getvalue())))
+            _SWITCH_IMGS[key] = imgs
+        return imgs
+
+    def _draw(self):
+        try:
+            on = bool(self.var.get())
+            self.delete("all")
+        except tk.TclError:
+            return
+        imgs = self._images()
+        if imgs:
+            self.create_image(0, 0, image=imgs[1 if on else 0], anchor="nw")
+            return
+        _pill(self, 0, 0, self.W, self.H, ACCENT if on else SWITCH_OFF)
+        m = 3
+        k = self.H - 2 * m
+        x = self.W - m - k if on else m
+        self.create_oval(x, m, x + k, m + k, fill="#ffffff", outline="#ffffff")
+
+    def toggle(self):
+        self.var.set(not self.var.get())
+        if self.command:
+            self.command()
+
+
+class Segmented(tk.Canvas):
+    """Сегментные кнопки (вместо радиокнопок): выбранный вариант подсвечен."""
+
+    def __init__(self, parent, options, variable, command=None, bg=None, scale=1.0,
+                 font=("Segoe UI", 9)):
+        self.opts = list(options)
+        self.font = tkfont.Font(font=font)
+        self.h = int(round(26 * scale))
+        self.inset = max(2, int(round(2 * scale)))
+        padx = int(round(11 * scale))
+        widths = [self.font.measure(t) + 2 * padx for _, t in self.opts]
+        self.edges = [self.inset]
+        for wdt in widths:
+            self.edges.append(self.edges[-1] + wdt)
+        self.W = self.edges[-1] + self.inset
+        super().__init__(parent, width=self.W, height=self.h, bg=bg or CARD_BG,
+                         highlightthickness=0, bd=0, cursor="hand2")
+        self.var, self.command = variable, command
+        self._hover = None
+        self.bind("<Button-1>", self._click)
+        self.bind("<Motion>", self._motion)
+        self.bind("<Leave>", lambda e: self._set_hover(None))
+        self._tid = variable.trace_add("write", lambda *a: self._draw())
+        self.bind("<Destroy>", self._untrace, add="+")
+        self._draw()
+
+    def _untrace(self, event=None):
+        try:
+            self.var.trace_remove("write", self._tid)
+        except Exception:
+            pass
+
+    def _index_at(self, x):
+        for i in range(len(self.opts)):
+            if self.edges[i] <= x < self.edges[i + 1]:
+                return i
+        return None
+
+    def _set_hover(self, i):
+        if i != self._hover:
+            self._hover = i
+            self._draw()
+
+    def _motion(self, event):
+        self._set_hover(self._index_at(event.x))
+
+    def _draw(self):
+        try:
+            cur = self.var.get()
+            self.delete("all")
+        except tk.TclError:
+            return
+        _pill(self, 0, 0, self.W, self.h, CHIPBTN_BG)
+        for i, (val, text) in enumerate(self.opts):
+            x0, x1 = self.edges[i], self.edges[i + 1]
+            sel = val == cur
+            if sel:
+                _pill(self, x0, self.inset, x1, self.h - self.inset, ACCENT, tag="sel")
+            fg = "#ffffff" if sel else (FG if i == self._hover else SYS_FG)
+            self.create_text((x0 + x1) / 2, self.h / 2, text=text, fill=fg, font=self.font)
+
+    def _click(self, event):
+        i = self._index_at(event.x)
+        if i is None or self.opts[i][0] == self.var.get():
+            return
+        self.var.set(self.opts[i][0])
+        if self.command:
+            self.command()
+
+
 class Tooltip:
     """Маленькая всплывающая подсказка для кнопок (в tkinter её нет из коробки)."""
 
@@ -2578,6 +3255,16 @@ class OverlayApp:
         self.chan_avatars = tk.BooleanVar(value=bool(cfg.get("chan_avatars", True)))
         self._av_fetching = set()   # twitch-id источников совместного чата, чьи аватарки уже запрошены
         self.show_ts = tk.BooleanVar(value=bool(cfg.get("timestamps", True)))
+        self.tr_outline_var = tk.StringVar(value=cfg.get("tr_outline", "thin"))
+        self._ot = None            # OutlineText: слова-картинки в прозрачном режиме (None — обычный текст)
+        self._ot_sig = None
+        self._ot_fonts = {}
+        self._cur_imgs = None      # картинки, вставленные при отрисовке текущего сообщения
+        self._restyle_job = None
+        self._bd = None            # Backdrop: полупрозрачная подложка под прозрачным чатом
+        self._bd_job = None
+        self._font_win = None
+        self._px_per_pt = root.winfo_fpixels("1p")
         self._stream_info = {}          # логин -> {'since', 'viewers', 'game'} — кто в эфире
         self._stream_info_loaded = False
         self._display_names = {}        # логин -> имя как на Twitch (с регистром)
@@ -2610,9 +3297,8 @@ class OverlayApp:
 
         # --- шрифты в духе Twitch: полужирные сообщения, жирные ники ---
         fams = set(tkfont.families())
-        base_family = next((f for f in ("Roobert", "Inter", "Segoe UI") if f in fams), "Segoe UI")
-        semi_family = next((f for f in ("Roobert SemiBold", "Inter SemiBold", "Inter Medium",
-                                        "Segoe UI Semibold") if f in fams), None)
+        ui_family = next((f for f in ("Roobert", "Inter", "Segoe UI") if f in fams), "Segoe UI")
+        base_family, semi_family = self._font_families(cfg.get("font_family"), fams)
         size = int(cfg.get("font_size", 11))
         self.font_msg = tkfont.Font(family=semi_family or base_family, size=size)
         self.font_nick = tkfont.Font(family=base_family, size=size, weight="bold")
@@ -2622,6 +3308,9 @@ class OverlayApp:
         self.font_small_b = tkfont.Font(family=base_family, size=max(8, size - 2), weight="bold")
         self.font_tag = tkfont.Font(family=base_family, size=max(7, size - 4), weight="bold")
         self.font_ts = tkfont.Font(family=base_family, size=max(8, size - 1))
+        # пробел между словами-картинками в прозрачном режиме (у картинок свои поля)
+        self.font_gap = tkfont.Font(family=base_family, size=1)
+        base_family = ui_family   # шапка и вкладки — интерфейс, их шрифт не меняется
         self.font_tab = tkfont.Font(family=base_family, size=9)
         self.font_tab_b = tkfont.Font(family=base_family, size=9, weight="bold")
         self.font_meta = tkfont.Font(family=base_family, size=9)
@@ -2738,6 +3427,9 @@ class OverlayApp:
         for w in (root, self.bar, self.live_dot, self.title_lbl, self.meta_lbl):
             w.bind("<Button-3>", self.open_settings)
 
+        root.bind("<Configure>", self._on_root_configure, add="+")
+        for wdg in (self.input_bar, self.chan_btn, self.entry_pill):
+            wdg.bind("<Configure>", lambda e: self._bd_schedule(), add="+")
         self._build_icon_photos()
         self.place_window()
         root.deiconify()
@@ -2777,221 +3469,413 @@ class OverlayApp:
         self._fill_settings()
         win.protocol("WM_DELETE_WINDOW", win.destroy)
         win.update_idletasks()
-        w = win.winfo_width()
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        ml, mt, mr, mb = self._monitor_rect()
         ox, oy = self.root.winfo_x(), self.root.winfo_y()
         x = ox + self.root.winfo_width() + 10
-        if x + w > self.root.winfo_screenwidth():
+        if x + w > mr:
             x = ox - w - 10
-        win.geometry("+%d+%d" % (x, max(0, oy)))
+        x = max(ml, min(x, mr - w))
+        y = max(mt, min(oy, mb - h - 48))   # 48 — запас на заголовок окна и панель задач
+        win.geometry("+%d+%d" % (x, y))
+        dwm_dark_title(win)
 
     def refresh_settings(self):
         if getattr(self, "settings_win", None) is not None and self.settings_win.winfo_exists():
             self._fill_settings()
 
     def _fill_settings(self):
+        """Панель настроек: карточки в две колонки, всё на одном экране."""
         win = self.settings_win
         win.title(T("m_settings"))
         win.configure(bg=BG)
         for c in win.winfo_children():
             c.destroy()
-        body = tk.Frame(win, bg=BG, padx=18, pady=14)
-        body.pack(fill="both", expand=True)
+        # содержимое — на канвасе: если экран совсем маленький, панель прокручивается колесом
+        holder = tk.Canvas(win, bg=BG, highlightthickness=0, bd=0)
+        holder.pack(fill="both", expand=True)
+        sc = self._px_per_pt * 0.75   # 1.0 при 100% масштабе Windows
+        gap = int(round(8 * sc))
+        page = tk.Frame(holder, bg=BG, padx=int(round(12 * sc)), pady=int(round(12 * sc)))
+        holder.create_window(0, 0, window=page, anchor="nw")
+        self._settings_holder = (holder, page)
         lbl_font = ("Segoe UI", 10)
+        small = ("Segoe UI", 8)
+        cols = tk.Frame(page, bg=BG)
+        cols.pack(fill="both", expand=True)
+        cols.grid_columnconfigure(0, weight=1, uniform="col")
+        cols.grid_columnconfigure(1, weight=1, uniform="col")
+        left = tk.Frame(cols, bg=BG)
+        right = tk.Frame(cols, bg=BG)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, gap // 2))
+        right.grid(row=0, column=1, sticky="nsew", padx=(gap // 2, 0))
 
-        def row():
-            f = tk.Frame(body, bg=BG)
-            f.pack(fill="x", pady=3)
+        def card(col, key, last=False):
+            c = Card(col, T(key), sc)
+            # нижние карточки тянутся до низа колонки — колонки кончаются ровно
+            c.pack(fill="both" if last else "x", expand=last, pady=(0, gap))
+            return c.body
+
+        lf = tkfont.Font(family="Segoe UI", size=10)
+        lab_w = max(lf.measure(T(k)) for k in ("m_theme", "s_layout", "lbl_lang", "s_font", "lbl_size",
+                                                "m_opacity", "lbl_outline", "lbl_backdrop", "mention_lbl"))
+        lab_chars = lab_w // max(1, lf.measure("0")) + 2   # ширина Label задаётся в «нулях»
+
+        def line(parent, label_key=None, pady=2):
+            f = tk.Frame(parent, bg=CARD_BG)
+            f.pack(fill="x", pady=int(round(pady * sc)))
+            if label_key:
+                tk.Label(f, text=T(label_key), bg=CARD_BG, fg=FG, font=lbl_font, width=lab_chars,
+                         anchor="w").pack(side="left")
             return f
 
-        def label(parent, key):
-            tk.Label(parent, text=T(key), bg=BG, fg=FG, font=lbl_font, width=17,
-                     anchor="w").pack(side="left")
+        def chip(parent, text, cmd, accent=False, fg=None):
+            return RoundButton(parent, text, command=cmd, fill=ACCENT if accent else CHIPBTN_BG,
+                               fg="#ffffff" if accent else (fg or FG), parent_bg=CARD_BG,
+                               font=("Segoe UI", 9), bold=accent)
 
-        def header(key):
-            tk.Label(body, text=T(key), bg=BG, fg=SYS_FG, font=("Segoe UI", 8, "bold"),
-                     anchor="w").pack(fill="x", pady=(10, 2))
+        def switch(parent, key, var, cmd, hotkey=None, tip=None):
+            f = tk.Frame(parent, bg=CARD_BG)
+            f.pack(fill="x", pady=int(round(2 * sc)))
+            sw = ToggleSwitch(f, var, cmd, bg=CARD_BG, scale=sc)
+            sw.pack(side="left")
+            lb = tk.Label(f, text=T(key), bg=CARD_BG, fg=FG, font=lbl_font, cursor="hand2")
+            lb.pack(side="left", padx=(int(round(8 * sc)), 0))
+            lb.bind("<Button-1>", lambda e: sw.toggle())
+            if tip:
+                Tooltip(lb, tip)
+            if hotkey:
+                kb = chip(f, self.cfg[hotkey[0]]["name"],
+                          lambda: self.rebind_key(hotkey[0], T(hotkey[1]), self.refresh_settings),
+                          fg=SYS_FG)
+                kb.pack(side="right")
+                Tooltip(kb, "key_tt")
+            return f
 
-        def chip_btn(parent, text, cmd):
-            return RoundButton(parent, text, command=cmd, fill=CHIPBTN_BG, fg=FG,
-                               parent_bg=BG, font=("Segoe UI", 9))
+        def slider(parent, label_key, lo, hi, value, cmd, fmt):
+            f = line(parent, label_key)
+            val = tk.Label(f, text=fmt % value, bg=CARD_BG, fg=SYS_FG, font=lbl_font, width=5,
+                           anchor="e")
 
-        # --- каналы / аккаунт / упоминания ---
-        r = row()
-        label(r, "s_channels")
-        pill = RoundEntry(r, font=("Segoe UI", 10), fill=ENTRY_BG, fg=FG, parent_bg=BG)
+            def on_move(v, cmd=cmd, val=val):
+                cmd(v)
+                try:
+                    val.configure(text=fmt % int(float(v)))
+                except tk.TclError:
+                    pass
+            RoundSlider(f, lo, hi, value, command=on_move, on_release=lambda: save_config(self.cfg),
+                        length=int(round(150 * sc)), parent_bg=CARD_BG).pack(side="left")
+            val.pack(side="left")
+            return val
+
+        def flow(parent, items, maxw):
+            """Чипсы по строкам — сколько влезает в ширину."""
+            row = None
+            used = maxw + 1
+            for make, width in items:
+                if used + width > maxw:
+                    row = tk.Frame(parent, bg=CARD_BG)
+                    row.pack(fill="x", pady=(0, int(round(4 * sc))))
+                    used = 0
+                make(row).pack(side="left", padx=(0, int(round(5 * sc))))
+                used += width + int(round(5 * sc))
+
+        chip_font = tkfont.Font(family="Segoe UI", size=9)
+        x_font = tkfont.Font(family="Segoe UI", size=8)
+        flow_w = int(round(330 * sc))
+
+        # ===== слева: каналы =====
+        body = card(left, "card_channels")
+        f = line(body)
+        pill = RoundEntry(f, font=lbl_font, fill=ENTRY_BG, fg=FG, parent_bg=CARD_BG, height=int(round(30 * sc)))
         self.set_chan_entry = pill.entry
         self.set_chan_entry.insert(0, ", ".join(self.cfg.get("channels") or []))
         pill.pack(side="left", fill="x", expand=True)
         self.set_chan_entry.bind("<Return>", lambda e: self._apply_channels_from_settings())
-        chip_btn(r, T("s_apply"), self._apply_channels_from_settings).pack(side="left", padx=(6, 0))
+        chip(f, T("s_apply"), self._apply_channels_from_settings, accent=True).pack(side="left", padx=(6, 0))
 
-        # --- избранные каналы ---
-        r = row()
-        label(r, "s_fav")
-        favwrap = tk.Frame(r, bg=BG)
-        favwrap.pack(side="left", fill="x", expand=True)
+        open_now = set(self.cfg.get("channels") or [])
+
+        def fav_chip(ch):
+            def make(parent):
+                on = ch in open_now
+                bg = TAB_ON if on else CHIPBTN_BG
+                fr = tk.Frame(parent, bg=bg)
+                lb = tk.Label(fr, text="#" + ch, bg=bg, fg=FG if on else SYS_FG,
+                              font=("Segoe UI", 9, "bold" if on else "normal"), padx=7, pady=2, cursor="hand2")
+                lb.pack(side="left")
+                lb.bind("<Button-1>", lambda e: self._fav_toggle(ch))
+                Tooltip(lb, "fav_toggle_tt")
+                xl = tk.Label(fr, text="✕", bg=bg, fg=SYS_FG, font=("Segoe UI", 8), padx=4, pady=2,
+                              cursor="hand2")
+                xl.pack(side="left")
+                xl.bind("<Button-1>", lambda e: self._unfavorite(ch))
+                return fr
+            return make, chip_font.measure("#" + ch) + x_font.measure("✕") + 26
+
+        def set_chip(name):
+            def make(parent):
+                fr = tk.Frame(parent, bg=CHIPBTN_BG)
+                lb = tk.Label(fr, text=name, bg=CHIPBTN_BG, fg=ACCENT, font=("Segoe UI", 9, "bold"),
+                              padx=7, pady=2, cursor="hand2")
+                lb.pack(side="left")
+                lb.bind("<Button-1>", lambda e: self._load_set(name))
+                Tooltip(lb, "set_hint")
+                xl = tk.Label(fr, text="✕", bg=CHIPBTN_BG, fg=SYS_FG, font=("Segoe UI", 8), padx=4,
+                              pady=2, cursor="hand2")
+                xl.pack(side="left")
+                xl.bind("<Button-1>", lambda e: self._delete_set(name))
+                return fr
+            return make, chip_font.measure(name) + x_font.measure("✕") + 26
+
+        def ghost_btn(text, cmd, tip):
+            def make(parent):
+                b = tk.Label(parent, text=text, bg=CARD_BG, fg=ACCENT, font=("Segoe UI", 9),
+                             padx=4, pady=2, cursor="hand2")
+                b.bind("<Button-1>", lambda e: cmd())
+                Tooltip(b, tip)
+                return b
+            return make, chip_font.measure(text) + 8
+
+        tk.Label(body, text=T("s_fav"), bg=CARD_BG, fg=SYS_FG, font=small, anchor="w").pack(
+            fill="x", pady=(int(round(6 * sc)), int(round(2 * sc))))
         favs = self.cfg.get("favorites") or []
-        if favs:
-            for ch in favs:
-                self._fav_chip(favwrap, ch)
-        else:
-            tk.Label(favwrap, text=T("fav_empty"), bg=BG, fg=SYS_FG,
-                     font=("Segoe UI", 8)).pack(side="left")
-        chip_btn(r, T("s_addfav"), self._add_favorite).pack(side="left", padx=(6, 0))
-
-        # --- сохранённые наборы ---
+        flow(body, [fav_chip(c) for c in favs] + [ghost_btn(T("fav_add"), self._add_favorite, "fav_add_tt")],
+             flow_w)
+        tk.Label(body, text=T("s_sets"), bg=CARD_BG, fg=SYS_FG, font=small, anchor="w").pack(
+            fill="x", pady=(int(round(2 * sc)), int(round(2 * sc))))
         sets = self.cfg.get("sets") or {}
-        r = row()
-        label(r, "s_sets")
-        setwrap = tk.Frame(r, bg=BG)
-        setwrap.pack(side="left", fill="x", expand=True)
-        for nm in sorted(sets):
-            self._set_chip(setwrap, nm)
-        chip_btn(r, T("s_saveset"), self._save_set).pack(side="left", padx=(6, 0))
+        flow(body, [set_chip(n) for n in sorted(sets)] + [ghost_btn(T("set_save"), self._save_set, "set_save_tt")],
+             flow_w)
 
-        r = row()
-        label(r, "s_account")
+        # ===== слева: окно и режимы =====
+        body = card(left, "card_window")
+        switch(body, "s_textonly", self.frameless, self.apply_frameless, ("key_frameless", "d_key_textonly"))
+        switch(body, "s_ghostinput", self.ghost_input, self.apply_ghost_input,
+               ("key_ghostinput", "d_key_ghostinput"))
+        switch(body, "s_click", self.clickthrough, self.apply_clickthrough, ("key_clickthrough", "d_key_click"))
+        switch(body, "s_expand", self.expand_var, lambda: self.set_expanded(self.expand_var.get()),
+               ("key_expand", "d_key_expand"))
+        switch(body, "s_fullscreen", self.fs_var, lambda: self.set_fullscreen(self.fs_var.get()),
+               ("key_fullscreen", "d_key_fullscreen"))
+        switch(body, "m_topmost", self.topmost, self.apply_topmost)
+        f = line(body, pady=4)
+        chip(f, T("m_resetpos"), self.reset_position).pack(side="left")
+
+        # ===== слева: аккаунт =====
+        body = card(left, "card_account", last=True)
+        f = line(body)
         if self.cfg.get("login"):
-            tk.Label(r, text="@" + self.cfg["login"], bg=BG, fg=ACCENT,
-                     font=lbl_font).pack(side="left")
-            chip_btn(r, T("m_logout"), self._logout_and_refresh).pack(side="left", padx=(8, 0))
+            tk.Label(f, text=T("acc_as"), bg=CARD_BG, fg=SYS_FG, font=lbl_font).pack(side="left")
+            tk.Label(f, text=" @" + self.cfg["login"], bg=CARD_BG, fg=ACCENT,
+                     font=("Segoe UI", 10, "bold")).pack(side="left")
+            chip(f, T("m_logout"), self._logout_and_refresh).pack(side="right")
         else:
-            chip_btn(r, T("m_login"), self.auth_dialog).pack(side="left")
-
-        r = row()
-        label(r, "s_mention")
-        mpill = RoundEntry(r, font=("Segoe UI", 10), fill=ENTRY_BG, fg=FG, parent_bg=BG)
+            chip(f, T("m_login"), self.auth_dialog, accent=True).pack(side="left")
+            tk.Label(f, text=T("acc_hint"), bg=CARD_BG, fg=SYS_FG, font=small).pack(side="left", padx=(8, 0))
+        f = line(body, "mention_lbl")
+        mpill = RoundEntry(f, font=lbl_font, fill=ENTRY_BG, fg=FG, parent_bg=CARD_BG, height=int(round(30 * sc)))
         self.set_mention_entry = mpill.entry
-        self.set_mention_entry.insert(0, self.cfg.get("highlight_name")
-                                      or self.cfg.get("login") or "")
+        self.set_mention_entry.insert(0, self.cfg.get("highlight_name") or self.cfg.get("login") or "")
         mpill.pack(side="left", fill="x", expand=True)
+        tk.Label(body, text=T("mention_hint"), bg=CARD_BG, fg=SYS_FG, font=small, anchor="w",
+                 justify="left", wraplength=int(round(330 * sc))).pack(fill="x", pady=(int(round(2 * sc)), 0))
         self.set_mention_entry.bind("<Return>", self._save_mention_entry)
         self.set_mention_entry.bind("<FocusOut>", self._save_mention_entry)
 
-        # --- режимы: переключатели ---
-        header("s_modes")
-        chk = dict(bg=BG, fg=FG, activebackground=BG, activeforeground=FG,
-                   selectcolor=ENTRY_BG, font=lbl_font, anchor="w",
-                   highlightthickness=0, bd=0, cursor="hand2")
-        r = row()
-        tk.Checkbutton(r, text=T("s_textonly"), variable=self.frameless,
-                       command=self.apply_frameless, **chk).pack(side="left")
-        chip_btn(r, self.cfg["key_frameless"]["name"],
-                 lambda: self.rebind_key("key_frameless", T("d_key_textonly"),
-                                         self.refresh_settings)).pack(side="right")
-        r = row()
-        tk.Checkbutton(r, text=T("s_ghostinput"), variable=self.ghost_input,
-                       command=self.apply_ghost_input, **chk).pack(side="left")
-        chip_btn(r, self.cfg["key_ghostinput"]["name"],
-                 lambda: self.rebind_key("key_ghostinput", T("d_key_ghostinput"),
-                                         self.refresh_settings)).pack(side="right")
-        r = row()
-        tk.Checkbutton(r, text=T("s_click"), variable=self.clickthrough,
-                       command=self.apply_clickthrough, **chk).pack(side="left")
-        chip_btn(r, self.cfg["key_clickthrough"]["name"],
-                 lambda: self.rebind_key("key_clickthrough", T("d_key_click"),
-                                         self.refresh_settings)).pack(side="right")
-        r = row()
-        tk.Checkbutton(r, text=T("s_expand"), variable=self.expand_var,
-                       command=lambda: self.set_expanded(self.expand_var.get()),
-                       **chk).pack(side="left")
-        chip_btn(r, self.cfg["key_expand"]["name"],
-                 lambda: self.rebind_key("key_expand", T("d_key_expand"),
-                                         self.refresh_settings)).pack(side="right")
-        r = row()
-        tk.Checkbutton(r, text=T("s_fullscreen"), variable=self.fs_var,
-                       command=lambda: self.set_fullscreen(self.fs_var.get()),
-                       **chk).pack(side="left")
-        chip_btn(r, self.cfg["key_fullscreen"]["name"],
-                 lambda: self.rebind_key("key_fullscreen", T("d_key_fullscreen"),
-                                         self.refresh_settings)).pack(side="right")
-        tk.Checkbutton(row(), text=T("m_topmost"), variable=self.topmost,
-                       command=self.apply_topmost, **chk).pack(side="left")
-        tk.Checkbutton(row(), text=T("m_ghost"), variable=self.ghost,
-                       command=self.apply_look, **chk).pack(side="left")
-        tk.Checkbutton(row(), text=T("s_chroma"), variable=self.obs_chroma,
-                       command=self.toggle_chroma, **chk).pack(side="left")
-        tk.Checkbutton(row(), text=T("s_modicons"), variable=self.mod_icons,
-                       command=self._save_mod_icons, **chk).pack(side="left")
-        tk.Checkbutton(row(), text=T("s_extras"), variable=self.chat_extras,
-                       command=self._save_chat_extras, **chk).pack(side="left")
-        tk.Checkbutton(row(), text=T("s_autoupd"), variable=self.auto_update,
-                       command=self._save_auto_update, **chk).pack(side="left")
-        tk.Checkbutton(row(), text=T("s_avatars"), variable=self.chan_avatars,
-                       command=self._save_chan_avatars, **chk).pack(side="left")
+        # ===== справа: внешний вид =====
+        body = card(right, "card_look")
+        f = line(body, "m_theme")
+        Segmented(f, (("twitch", "Twitch"), ("claude", "Claude")), self.theme_var, self.set_theme,
+                  bg=CARD_BG, scale=sc).pack(side="left")
+        f = line(body, "s_layout")
+        Segmented(f, (("tabs", T("lay_tabs")), ("unified", T("lay_feed")), ("columns", T("lay_columns"))),
+                  self.layout_var, lambda: self.set_layout(self.layout_var.get()), bg=CARD_BG,
+                  scale=sc).pack(side="left")
+        f = line(body, "lbl_lang")
+        Segmented(f, (("ru", "Русский"), ("en", "English")), self.lang_var, self.set_lang,
+                  bg=CARD_BG, scale=sc).pack(side="left")
+        f = line(body, "s_font")
+        fb = chip(f, (self.cfg.get("font_family") or T("font_auto")) + "  ▾", None)
+        fb._command = lambda: self._open_font_menu(fb)
+        fb.pack(side="left")
+        self._fs_lbl = slider(body, "lbl_size", 9, 18, int(self.cfg.get("font_size", 11)),
+                              self._on_font_slide, "%d")
+        self._op_lbl = slider(body, "m_opacity", 30, 100, round(float(self.cfg.get("opacity", 0.88)) * 100),
+                              self._on_opacity_slide, "%d%%")
 
-        # --- вид: светлые слайдеры-пилюли ---
-        header("s_appear")
-        r = row()
-        label(r, "m_opacity")
-        op = RoundSlider(r, 30, 100, round(float(self.cfg.get("opacity", 0.88)) * 100),
-                         command=self._on_opacity_slide,
-                         on_release=lambda: save_config(self.cfg),
-                         length=160, parent_bg=BG)
-        op.pack(side="left")
-        self._op_lbl = tk.Label(r, text="%d%%" % round(float(self.cfg.get("opacity", 0.88)) * 100),
-                                bg=BG, fg=SYS_FG, font=lbl_font, width=5, anchor="e")
-        self._op_lbl.pack(side="left")
+        # ===== справа: прозрачный режим =====
+        body = card(right, "card_transp")
+        tk.Label(body, text=T("transp_hint"), bg=CARD_BG, fg=SYS_FG, font=small, anchor="w",
+                 justify="left", wraplength=int(round(320 * sc))).pack(fill="x", pady=(0, int(round(4 * sc))))
+        switch(body, "m_ghost", self.ghost, self.apply_look)
+        f = line(body, "lbl_outline")
+        Segmented(f, (("none", T("ol_none")), ("thin", T("ol_thin")), ("bold", T("ol_bold")),
+                      ("shadow", T("ol_shadow"))), self.tr_outline_var, self._set_outline,
+                  bg=CARD_BG, scale=sc).pack(side="left")
+        self._trbg_lbl = slider(body, "lbl_backdrop", 0, 90, int(self.cfg.get("tr_bg", 0)),
+                                self._on_trbg_slide, "%d%%")
+        switch(body, "s_chroma", self.obs_chroma, self.toggle_chroma)
 
-        r = row()
-        label(r, "m_fontsize")
-        fsc = RoundSlider(r, 9, 18, int(self.cfg.get("font_size", 11)),
-                          command=self._on_font_slide,
-                          on_release=lambda: save_config(self.cfg),
-                          length=160, parent_bg=BG)
-        fsc.pack(side="left")
-        self._fs_lbl = tk.Label(r, text=str(int(self.cfg.get("font_size", 11))),
-                                bg=BG, fg=SYS_FG, font=lbl_font, width=5, anchor="e")
-        self._fs_lbl.pack(side="left")
+        # ===== справа: лента =====
+        body = card(right, "card_feed", last=True)
+        grid = tk.Frame(body, bg=CARD_BG)
+        grid.pack(fill="x")
+        grid.grid_columnconfigure(0, weight=1, uniform="fc")
+        grid.grid_columnconfigure(1, weight=1, uniform="fc")
+        feed = (("s_extras", self.chat_extras, self._save_chat_extras, "s_extras_tt"),
+                ("s_avatars", self.chan_avatars, self._save_chan_avatars, "s_avatars_tt"),
+                ("s_timestamps", self.show_ts, self._toggle_ts, None),
+                ("s_anim", self.anim_enabled, self.toggle_animations, None),
+                ("s_modicons", self.mod_icons, self._save_mod_icons, None))
+        for i, (key, var, cmd, tip) in enumerate(feed):
+            cell = tk.Frame(grid, bg=CARD_BG)
+            cell.grid(row=i // 2, column=i % 2, sticky="w")
+            switch(cell, key, var, cmd, tip=tip)
+        f = line(body, pady=4)
+        chip(f, T("m_clear"), self.clear_chat).pack(side="left")
 
-        tk.Checkbutton(row(), text=T("s_anim"), variable=self.anim_enabled,
-                       command=self.toggle_animations, **chk).pack(side="left")
-        tk.Checkbutton(row(), text=T("s_timestamps"), variable=self.show_ts,
-                       command=self._toggle_ts, **chk).pack(side="left")
+        # ===== подвал: поддержать, о программе, обновления, выход =====
+        foot = tk.Frame(page, bg=BG)
+        foot.pack(fill="x", pady=(int(round(2 * sc)), 0))
 
-        rb = dict(bg=BG, fg=FG, activebackground=BG, activeforeground=FG,
-                  selectcolor=ENTRY_BG, font=lbl_font, highlightthickness=0,
-                  bd=0, cursor="hand2")
-        r = row()
-        label(r, "s_layout")
-        for val, key in (("tabs", "lay_tabs"), ("unified", "lay_unified"),
-                         ("columns", "lay_columns")):
-            tk.Radiobutton(r, text=T(key), variable=self.layout_var, value=val,
-                           command=lambda: self.set_layout(self.layout_var.get()),
-                           **rb).pack(side="left", padx=(0, 8))
-        r = row()
-        label(r, "m_theme")
-        tk.Radiobutton(r, text="Twitch", variable=self.theme_var, value="twitch",
-                       command=self.set_theme, **rb).pack(side="left")
-        tk.Radiobutton(r, text="Claude", variable=self.theme_var, value="claude",
-                       command=self.set_theme, **rb).pack(side="left", padx=(10, 0))
-        r = row()
-        label(r, "m_lang")
-        tk.Radiobutton(r, text="Русский", variable=self.lang_var, value="ru",
-                       command=self.set_lang, **rb).pack(side="left")
-        tk.Radiobutton(r, text="English", variable=self.lang_var, value="en",
-                       command=self.set_lang, **rb).pack(side="left", padx=(10, 0))
+        def link(text, cmd, fg=SYS_FG, bold=False):
+            lb = tk.Label(foot, text=text, bg=BG, fg=fg, font=("Segoe UI", 10, "bold" if bold else "normal"),
+                          cursor="hand2")
+            lb.bind("<Button-1>", lambda e: cmd())
+            return lb
 
-        # --- низ: действия и ссылки ---
-        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(12, 8))
-        r = row()
-        chip_btn(r, T("m_clear"), self.clear_chat).pack(side="left")
-        chip_btn(r, T("m_resetpos"), self.reset_position).pack(side="left", padx=(6, 0))
-        r = row()
-        sup = tk.Label(r, text=T("s_support"), bg=BG, fg=ACCENT,
-                       font=("Segoe UI", 10, "bold"), cursor="hand2")
-        sup.pack(side="left")
-        sup.bind("<Button-1>", lambda e: webbrowser.open(DONATE_URL))
-        ab = tk.Label(r, text="%s · v%s" % (T("s_about"), APP_VERSION), bg=BG, fg=SYS_FG,
-                      font=lbl_font, cursor="hand2")
-        ab.pack(side="left", padx=(14, 0))
-        ab.bind("<Button-1>", lambda e: self.about_dialog())
-        up = tk.Label(r, text=T("upd_check"), bg=BG, fg=SYS_FG, font=lbl_font, cursor="hand2")
-        up.pack(side="left", padx=(14, 0))
-        up.bind("<Button-1>", lambda e: self.check_updates(manual=True))
-        q = tk.Label(r, text=T("m_quit"), bg=BG, fg="#e06c6c", font=lbl_font, cursor="hand2")
-        q.pack(side="right")
-        q.bind("<Button-1>", lambda e: self.quit())
+        link(T("s_support"), lambda: webbrowser.open(DONATE_URL), fg=ACCENT, bold=True).pack(side="left")
+        link(T("s_about"), self.about_dialog).pack(side="left", padx=(int(round(14 * sc)), 0))
+        link(T("m_quit"), self.quit, fg="#e06c6c").pack(side="right")
+        link(T("upd_short"), lambda: self.check_updates(manual=True)).pack(
+            side="right", padx=(0, int(round(16 * sc))))
+        tk.Label(foot, text="v" + APP_VERSION, bg=BG, fg=SYS_FG, font=lbl_font).pack(
+            side="right", padx=(0, int(round(6 * sc))))
+        au = tk.Frame(foot, bg=BG)
+        au.pack(side="right", padx=(0, int(round(16 * sc))))
+        sw = ToggleSwitch(au, self.auto_update, self._save_auto_update, bg=BG, scale=sc)
+        sw.pack(side="left")
+        lb = tk.Label(au, text=T("s_autoupd"), bg=BG, fg=SYS_FG, font=lbl_font, cursor="hand2")
+        lb.pack(side="left", padx=(int(round(6 * sc)), 0))
+        lb.bind("<Button-1>", lambda e: sw.toggle())
+        Tooltip(lb, "s_autoupd_tt")
+        self._fit_settings()
+
+    def _fav_toggle(self, ch):
+        """Клик по избранному: открыт — закрыть, нет — открыть вкладкой."""
+        if ch in (self.cfg.get("channels") or []):
+            self.close_channel(ch)
+        else:
+            self._add_channels([ch])
+        self.refresh_settings()
+
+    def _fit_settings(self):
+        """Панель настроек по высоте экрана; не влезает — прокрутка колесом мыши."""
+        holder, body = self._settings_holder
+        win = self.settings_win
+        body.update_idletasks()
+        bw, bh = body.winfo_reqwidth(), body.winfo_reqheight()
+        ml, mt, mr, mb = self._monitor_rect()
+        h = min(bh, max(320, (mb - mt) - 90))
+        holder.configure(width=bw, height=h, scrollregion=(0, 0, bw, bh), yscrollincrement=24)
+        if bh > h:
+            def wheel(e):
+                try:
+                    holder.yview_scroll(-1 * (e.delta // 120), "units")
+                except tk.TclError:
+                    pass
+            win.bind("<MouseWheel>", wheel)
+        else:
+            win.unbind("<MouseWheel>")
+
+    def _set_outline(self):
+        self.cfg["tr_outline"] = self.tr_outline_var.get()
+        save_config(self.cfg)
+        self._update_outline()
+
+    def _on_trbg_slide(self, val):
+        v = int(float(val))
+        if v == int(self.cfg.get("tr_bg", 0)):
+            return
+        self.cfg["tr_bg"] = v
+        try:
+            self._trbg_lbl.configure(text="%d%%" % v)
+        except tk.TclError:
+            pass
+        self._bd_schedule()
+
+    def _open_font_menu(self, anchor):
+        """Список шрифтов чата — каждый подписан своим же шрифтом."""
+        if self._font_win is not None and self._font_win.winfo_exists():
+            self._close_font_menu()
+            return
+        win = tk.Toplevel(self.root)
+        self._font_win = win
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=BORDER)
+        box = tk.Frame(win, bg=BAR_BG, padx=4, pady=4)
+        box.pack(padx=1, pady=1)
+        fams = set(tkfont.families(self.root))
+        cur = self.cfg.get("font_family") or ""
+        for fam in [""] + [f for f in FONT_CHOICES if f in fams]:
+            lbl = tk.Label(box, text=fam or T("font_auto"), bg=BAR_BG,
+                           fg=ACCENT if fam == cur else FG, font=(fam or "Segoe UI", 11),
+                           anchor="w", padx=12, pady=2, cursor="hand2")
+            lbl.pack(fill="x")
+            lbl.bind("<Enter>", lambda e, l=lbl: l.configure(bg=CHIPBTN_BG))
+            lbl.bind("<Leave>", lambda e, l=lbl: l.configure(bg=BAR_BG))
+            lbl.bind("<Button-1>", lambda e, f=fam: self._pick_font(f))
+        win.update_idletasks()
+        x, y = anchor.winfo_rootx(), anchor.winfo_rooty() + anchor.winfo_height() + 4
+        sw, sh = win.winfo_reqwidth(), win.winfo_reqheight()
+        ml, mt, mr, mb = self._monitor_rect()
+        x = max(ml, min(x, mr - sw - 4))
+        if y + sh > mb:
+            y = max(mt, anchor.winfo_rooty() - sh - 4)
+        win.geometry("+%d+%d" % (x, y))
+        dwm_round(win, small=True)
+        win.bind("<Escape>", lambda e: self._close_font_menu())
+        win.bind("<FocusOut>", lambda e: win.after(150, self._font_menu_focus_check))
+        win.focus_force()
+
+    def _font_menu_focus_check(self):
+        win = self._font_win
+        if win is None or not win.winfo_exists():
+            return
+        try:
+            f = self.root.focus_get()
+        except (tk.TclError, KeyError):
+            f = None
+        if f is None or not str(f).startswith(str(win)):
+            self._close_font_menu()
+
+    def _close_font_menu(self):
+        win, self._font_win = self._font_win, None
+        if win is not None:
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+
+    def _pick_font(self, fam):
+        self._close_font_menu()
+        self.set_font_family(fam)
+
+    def set_font_family(self, fam):
+        """Шрифт чата: обычный текст Tk меняется сразу, слова-картинки — перерисовкой."""
+        self.cfg["font_family"] = fam or ""
+        save_config(self.cfg)
+        base, semi = self._font_families(fam)
+        self.font_msg.configure(family=semi or base)
+        for f in (self.font_nick, self.font_sys, self.font_chip, self.font_small,
+                  self.font_small_b, self.font_tag, self.font_ts, self.font_gap):
+            f.configure(family=base)
+        for w in self.texts.values():
+            w.tag_configure("tail", font=(self.font_msg.cget("family"), 1))
+        self._update_outline()
+        self.refresh_settings()
 
     def _apply_channels_from_settings(self):
         chans = parse_channels(self.set_chan_entry.get())
@@ -3116,6 +4000,8 @@ class OverlayApp:
         self.font_small_b.configure(size=max(8, size - 2))
         self.font_tag.configure(size=max(7, size - 4))
         self.font_ts.configure(size=max(8, size - 1))
+        if self._ot is not None:
+            self._schedule_restyle()   # слова-картинки — под новый кегль (после отпускания ползунка)
         self._build_icon_photos()  # иконки перерисовываем под новый кегль
         self._sync_announce_icon()
         try:
@@ -3298,6 +4184,7 @@ class OverlayApp:
         else:
             self.input_bar.pack_forget()
         self.grip.lift()
+        self._bd_schedule()
 
     def update_chan_btn(self):
         chans = self.cfg.get("channels") or []
@@ -3463,6 +4350,8 @@ class OverlayApp:
 
     def minimize_window(self):
         self._minimized = True
+        if self._bd is not None:
+            self._bd.hide()
         try:
             self.root.withdraw()
             self._proxy.iconify()
@@ -3480,6 +4369,7 @@ class OverlayApp:
             self._force_topmost(True)
         except tk.TclError:
             pass
+        self._bd_schedule()
 
     def _proxy_unmapped(self, event=None):
         # клик по кнопке в таскбаре при открытом окне — сворачиваемся
@@ -3890,6 +4780,7 @@ class OverlayApp:
                 self._paint_chat_bg(key)
                 self._paint_input_bg(key)
                 dwm_border(self.root, True)   # системная обводка Win11 — долой
+                dwm_corners(self.root, False)  # и серая тень вокруг (она идёт вместе со скруглением)
                 self.root.attributes("-alpha", 1.0)
                 self.root.attributes("-transparentcolor", key)
             else:
@@ -3897,18 +4788,226 @@ class OverlayApp:
                 self._paint_chat_bg(BG)
                 self._paint_input_bg(BAR_BG)
                 dwm_border(self.root, False)
+                dwm_corners(self.root, True)
                 self.root.attributes("-transparentcolor", "")
                 self.root.attributes("-alpha", float(self.cfg.get("opacity", 0.88)))
         except tk.TclError:
             pass
         save_config(self.cfg)
+        self._update_outline()
+        self._bd_schedule()
+
+    # ---------- прозрачный режим: слова-картинки и подложка ----------
+
+    def _font_families(self, choice, fams=None):
+        """(основное семейство, полужирное) для шрифта чата; choice "" — авто."""
+        fams = fams if fams is not None else set(tkfont.families(self.root))
+        if choice and choice in fams:
+            semi = next((f for f in (choice + " Semibold", choice + " SemiBold", choice + " Medium")
+                         if f in fams), None)
+            return choice, semi
+        base = next((f for f in ("Roobert", "Inter", "Segoe UI") if f in fams), "Segoe UI")
+        semi = next((f for f in ("Roobert SemiBold", "Inter SemiBold", "Inter Medium",
+                                 "Segoe UI Semibold") if f in fams), None)
+        return base, semi
+
+    def _outline_style(self):
+        style = self.cfg.get("tr_outline", "thin")
+        if HAS_PIL and self.ghost.get() and style in OutlineText.STYLES:
+            return style
+        return None
+
+    def _update_outline(self, force=False):
+        """Включает/выключает слова-картинки; если вид текста поменялся — перерисовывает ленты."""
+        style = self._outline_style()
+        sig = None
+        if style:
+            fonts = (self.font_msg, self.font_nick, self.font_sys, self.font_chip, self.font_small,
+                     self.font_small_b, self.font_tag, self.font_ts)
+            sig = (style, tuple(tuple(sorted(f.actual().items())) for f in fonts),
+                   FG, SYS_FG, TS_FG, LINK_FG, CHIP_FG, FIRST_FG, self._px_per_pt)
+        if sig == self._ot_sig and not force:
+            return
+        self._ot_sig = sig
+        if style:
+            def px(f):
+                return max(6, int(round(abs(int(f.actual("size"))) * self._px_per_pt)))
+
+            def spec(f, upright=False):
+                a = f.actual()
+                return pil_font_spec(a["family"], a["weight"] == "bold",
+                                     a["slant"] == "italic" and not upright)
+            self._ot_fonts = {
+                "msg": (spec(self.font_msg), px(self.font_msg), False),
+                "nick": (spec(self.font_nick), px(self.font_nick), False),
+                # служебные строки прямым: мелкий курсив в обводке превращается в кашу
+                "sys": (spec(self.font_sys, upright=True), px(self.font_sys), False),
+                "chip": (spec(self.font_chip), px(self.font_chip), False),
+                "small": (spec(self.font_small), px(self.font_small), False),
+                "small_b": (spec(self.font_small_b), px(self.font_small_b), False),
+                "tag": (spec(self.font_tag), px(self.font_tag), False),
+                "ts": (spec(self.font_ts), px(self.font_ts), False),
+            }
+            self._ot = OutlineText(self.root, style, self.font_msg.metrics("ascent"),
+                                   self.font_msg.metrics("descent"))
+            # у картинок поля по краям — пробел между ними делаем уже, чтобы шаг слов был обычным
+            target = max(1, self.font_msg.measure(" ") - 2 * self._ot.pad)
+            best = 1
+            for size in range(1, 30):
+                self.font_gap.configure(size=size)
+                if self.font_gap.measure(" ") > target:
+                    break
+                best = size
+            self.font_gap.configure(size=best)
+        else:
+            self._ot = None
+            self._ot_fonts = {}
+        self._restyle_feeds()
+
+    def _schedule_restyle(self):
+        if self._restyle_job is not None:
+            self.root.after_cancel(self._restyle_job)
+        self._restyle_job = self.root.after(300, self._run_restyle)
+
+    def _run_restyle(self):
+        self._restyle_job = None
+        self._update_outline()
+
+    def _restyle_feeds(self):
+        """Перерисовать ленты в новом виде: видимые — сразу, остальные — когда покажут."""
+        for w in self.texts.values():
+            w._restyle = True
+        self._restyle_visible()
+
+    def _restyle_visible(self):
+        for w in list(self.texts.values()):
+            try:
+                shown = w.winfo_manager() != ""
+            except tk.TclError:
+                continue
+            if w._restyle and shown:
+                self._replay_feed(w)
+
+    @staticmethod
+    def _drop_hist(w, lines):
+        """Сверху срезали `lines` строк — забываем ушедшие сообщения вместе с картинками
+        их слов (иначе в прозрачном режиме они держали бы десятки мегабайт)."""
+        h = w._hist
+        while h and h[0][3] <= lines:
+            lines -= h.popleft()[3]
+
+    def _replay_feed(self, w, keep=80):
+        """Заново отрисовать последние сообщения ленты (после смены вида текста)."""
+        w._restyle = False
+        hist = list(w._hist)[-keep:]
+        try:
+            w.configure(state="normal")
+            w.delete("1.0", "end")
+            self._drop_dead_tags(w)
+            w._hist.clear()
+            for item, hit, _imgs, _n in hist:
+                self._cur_imgs = []
+                n0 = int(w.index("end-1c").split(".")[0])
+                try:
+                    self._render_item(w, item, hit)
+                except tk.TclError:
+                    break
+                w._hist.append((item, hit, self._cur_imgs, int(w.index("end-1c").split(".")[0]) - n0))
+            w.tag_add("tail", "end-1c", "end")
+            w.configure(state="disabled")
+            w._follow = True
+            w.see("end")
+        except tk.TclError:
+            pass
+        finally:
+            self._cur_imgs = None
+
+    def _bd_supported(self):
+        return bool(HAS_PIL and self.user32)
+
+    def _on_root_configure(self, event):
+        if event.widget is self.root:
+            self._bd_schedule()
+
+    def _bd_schedule(self):
+        if self._bd_job is None:
+            try:
+                self._bd_job = self.root.after(16, self._bd_sync)
+            except tk.TclError:
+                pass
+
+    def _bd_pills(self, rx, ry):
+        """Таблетки строки ввода (в прозрачном режиме их рисует подложка)."""
+        out = []
+        try:
+            if not self.input_bar.winfo_ismapped():
+                return out
+            for wdg, kind in ((self.chan_btn, "pill"), (self.entry_pill, "pill"),
+                              (self.announce_btn, "dot"), (self.emote_btn, "dot")):
+                if not wdg.winfo_ismapped():
+                    continue
+                x, y = wdg.winfo_rootx() - rx, wdg.winfo_rooty() - ry
+                w, h = wdg.winfo_width(), wdg.winfo_height()
+                if w < 4 or h < 4:
+                    continue
+                if kind == "dot":
+                    d = min(w, h) + 6
+                    out.append(("dot", x + (w - d) // 2, y + (h - d) // 2, d, d))
+                elif wdg is self.entry_pill:
+                    out.append(("pill", x + 1, y + 2, w - 2, h - 4))
+                else:
+                    out.append(("pill", x + 1, y + 1, w - 2, h - 2))
+        except tk.TclError:
+            pass
+        return out
+
+    def _bd_sync(self):
+        """Подложка под прозрачным чатом: показать/спрятать, подогнать размер и место."""
+        self._bd_job = None
+        if not self._bd_supported():
+            return
+        try:
+            visible = (bool(self.ghost.get()) and not self._minimized
+                       and bool(self.root.winfo_viewable()))
+            rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
+            w, h = self.root.winfo_width(), self.root.winfo_height()
+        except tk.TclError:
+            return
+        alpha = int(self.cfg.get("tr_bg", 0)) if visible else 0
+        pills = self._bd_pills(rx, ry) if visible else []
+        if not visible or w < 20 or h < 20 or (alpha <= 0 and not pills):
+            if self._bd is not None:
+                self._bd.hide()
+            return
+        if self._bd is None:
+            self._bd = Backdrop()
+        color = _hex_to_rgb(BG if BG != CHROMA_KEY else "#111317")
+        radius = int(round(10 * self._px_per_pt * 0.75))
+        try:
+            self._bd.show((w, h, alpha, tuple(pills), radius, color), rx, ry)
+        except Exception as e:
+            dbg("! backdrop:", e)
+            return
+        self._bd_zorder()
+
+    def _bd_zorder(self):
+        if self._bd is None or not self.user32:
+            return
+        try:
+            hwnd = self.user32.GetAncestor(self.root.winfo_id(), 2)
+            self._bd.place_below(hwnd, bool(self.topmost.get()))
+        except Exception:
+            pass
 
     def _paint_input_bg(self, color):
-        """Подложка строки ввода: в прозрачном режиме остаются только пилюли."""
+        """Подложка строки ввода. В прозрачном режиме таблетки рисует полупрозрачная
+        подложка-окно, а сами они становятся цветом-ключом — сквозь них видна игра."""
+        clear = color != BAR_BG and self._bd_supported()
         try:
             self.input_bar.configure(bg=color)
-            self.chan_btn.restyle(parent_bg=color)
-            self.entry_pill.restyle(parent_bg=color)
+            self.chan_btn.restyle(fill=color if clear else CHIPBTN_BG,
+                                  fg=FG if clear else CHIP_FG, parent_bg=color)
+            self.entry_pill.restyle(fill=color if clear else ENTRY_BG, parent_bg=color)
             self.emote_btn.configure(bg=color)
             self.announce_btn.configure(bg=color)
         except tk.TclError:
@@ -3920,6 +5019,7 @@ class OverlayApp:
         for w in self.texts.values():
             w.configure(bg=color)
         self.grip.configure(bg=color)
+        self.newmsg_btn.restyle(parent_bg=color)   # иначе в хромакее вокруг кнопки виден фон
 
     def _toggle_ts(self):
         """Время у сообщений: скрываем/показываем сразу во всех лентах (без перерисовки)."""
@@ -4080,6 +5180,7 @@ class OverlayApp:
             self.user32.SetWindowPos(hwnd, -1 if enable else -2, 0, 0, 0, 0, 0x0013)
         except Exception:
             pass
+        self._bd_zorder()   # подложка — сразу под окном чата
 
     def apply_topmost(self):
         on = bool(self.topmost.get())
@@ -4401,6 +5502,8 @@ class OverlayApp:
             w.delete("1.0", "end")
             w.tag_add("tail", "end-1c", "end")
             w.configure(state="disabled")
+            w._hist.clear()   # иначе смена вида текста вернула бы стёртые сообщения
+            self._drop_dead_tags(w)
 
     def sys_message(self, msg):
         self.render(("sys", msg))
@@ -4474,6 +5577,12 @@ class OverlayApp:
         Анимированные регистрируются в self._anim: один общий PhotoImage
         обновляется кадрами, и все его копии во всех лентах двигаются сами.
         """
+        img = self._cached_image(key, payload)
+        if img is not None and self._cur_imgs is not None:
+            self._cur_imgs.append(img)
+        return img
+
+    def _cached_image(self, key, payload):
         st = self._anim.get(key)
         if st is not None:
             return st["master"]
@@ -4640,18 +5749,27 @@ class OverlayApp:
         follow = self._is_following(w)
         w.configure(state="normal")
         hit_any = False
-        for item, hit in flagged:
-            try:
-                self._render_item(w, item, hit)
-                hit_any = hit_any or hit
-            except tk.TclError:
-                break
+        try:
+            for item, hit in flagged:
+                self._cur_imgs = []
+                n0 = int(w.index("end-1c").split(".")[0])
+                try:
+                    self._render_item(w, item, hit)
+                    hit_any = hit_any or hit
+                except tk.TclError:
+                    break
+                w._hist.append((item, hit, self._cur_imgs,
+                                int(w.index("end-1c").split(".")[0]) - n0))
+        finally:
+            self._cur_imgs = None
         last = int(w.index("end-1c").split(".")[0])
         maxm = int(self.cfg.get("max_messages", 150))
         # пока чат на паузе, старое не удаляем — иначе текст уедет из-под глаз
         # (но и не копим бесконечно)
         if last > maxm and (follow or last > maxm * 4):
             w.delete("1.0", "%d.0" % (last - maxm + 1))
+            self._drop_dead_tags(w)
+            self._drop_hist(w, last - maxm)
         w.tag_add("tail", "end-1c", "end")
         w.configure(state="disabled")
         try:
@@ -4759,6 +5877,8 @@ class OverlayApp:
         w.tag_configure("link", foreground=LINK_FG)
         w.tag_configure("rdmcost", foreground=SYS_FG)
         w.tag_configure("rpdata", elide=True)   # исходное сообщение ответа — для подсказки
+        w.tag_configure("linkdata", elide=True)  # адрес ссылки, нарисованной картинкой
+        w.tag_configure("wgap", font=self.font_gap)   # пробел между словами-картинками
         # последняя строка ленты всегда пустая — делаем её почти нулевой высоты,
         # чтобы свежее сообщение стояло у самого низа
         w.tag_configure("tail", font=(self.font_msg.cget("family"), 1),
@@ -4777,6 +5897,11 @@ class OverlayApp:
         w._ctags = set()   # цветовые теги этой ленты
         w._follow = True   # лента едет за новыми сообщениями; прокрутили вверх — пауза
         w._anim = None
+        # что показано в ленте: (сообщение, подсветка, картинки) — чтобы перерисовать её
+        # при смене вида и чтобы картинки на экране не выселялись из кэша
+        w._hist = deque(maxlen=int(self.cfg.get("max_messages", 150)) * 4 + 50)
+        w._restyle = False
+        w._mtags = deque()   # теги сообщений по порядку — удаляются вместе с их строками
         return w
 
     def _rebuild_tabs(self):
@@ -5079,6 +6204,7 @@ class OverlayApp:
             self._style_tabs()
 
         self.grip.lift()
+        self._restyle_visible()
         self.text._follow = True
         try:
             self.text.see("end")
@@ -5191,6 +6317,7 @@ class OverlayApp:
             return None
         self._msg_seq += 1
         tag = "mm%d" % self._msg_seq
+        w._mtags.append(tag)
         self._msg_meta[tag] = (channel, login, name, uid, mid)
         if len(self._msg_meta) > 900:
             for k in list(self._msg_meta)[:300]:
@@ -5198,6 +6325,24 @@ class OverlayApp:
         w.tag_bind(tag, "<Button-3>",
                    lambda e, t=tag: self.user_action_popup(e, t))
         return tag
+
+    def _drop_dead_tags(self, w):
+        """Строки старых сообщений удалены — удаляем и их теги. Иначе на каждое сообщение
+        в ленте навсегда остаётся тег с привязкой мыши, и за долгий стрим их десятки
+        тысяч: лента тормозит, а память растёт."""
+        mt = w._mtags
+        while mt and not w.tag_ranges(mt[0]):
+            t = mt.popleft()
+            w.tag_delete(t, t + ".b", t + ".t", t + ".w", t + ".d")
+        # теги ников и цветов — по одному на зрителя/цвет; когда их больше, чем может быть
+        # на экране, убираем тех, чьих строк в ленте уже нет
+        lim = 2 * int(self.cfg.get("max_messages", 150)) + 50
+        for tags in (w._utags, w._ctags):
+            if len(tags) > lim:
+                dead = [t for t in tags if not w.tag_ranges(t)]
+                if dead:
+                    w.tag_delete(*dead)
+                    tags.difference_update(dead)
 
     def _is_mod(self, channel):
         us = self.irc.userstate.get(channel) if self.irc else None
@@ -5323,6 +6468,105 @@ class OverlayApp:
     _AT_RE = re.compile(r"(@[A-Za-z0-9_]{3,25})")
 
     _URL_RE = re.compile(r"((?:https?://|www\.)[^\s]+)", re.IGNORECASE)
+    _TOK_RE = re.compile(r"(\s+)")
+    _GAP_KEEP = ("ts",)   # теги, которые нужны и пробелу между словами (скрытие времени)
+
+    def _ins(self, w, text, tags=()):
+        """Вставка текста в ленту. В прозрачном режиме — словами-картинками с обводкой."""
+        if isinstance(tags, str):
+            tags = (tags,)
+        if self._ot is None or not text:
+            w.insert("end", text, tags)
+            return
+        fg, fkey = self._tag_style(tags)
+        keep = tuple(t for t in tags if t in self._GAP_KEEP)
+        for tok in self._TOK_RE.split(text):
+            if not tok:
+                continue
+            if tok.isspace():
+                w.insert("end", tok, tags if "\n" in tok else ("wgap",) + keep)
+                continue
+            # длинные «слова» (ссылки) режем, иначе картинку не перенести на новую строку;
+            # у кусков нет внутренних полей — шва не видно
+            spec, px, italic = self._ot_fonts.get(fkey) or self._ot_fonts["msg"]
+            step = 30
+            for i in range(0, len(tok), step):
+                chunk = tok[i:i + step]
+                img = self._ot.image(chunk, fg, spec, px, italic,
+                                     lpad=i == 0, rpad=i + step >= len(tok))
+                if img is None:   # символы, которых нет в шрифтах, — обычным текстом
+                    w.insert("end", chunk, tags)
+                    continue
+                self._put_img(w, img, tags)
+
+    def _put_img(self, w, img, tags):
+        w.image_create("end", image=img)
+        for t in tags:
+            w.tag_add(t, "end-2c")
+        if self._cur_imgs is not None:
+            self._cur_imgs.append(img)
+
+    def _ins_nick(self, w, name, nick_tags, action):
+        """Ник и двоеточие. В режиме картинок — одной картинкой: у отдельных картинок
+        свои поля, и двоеточие отъезжало бы от ника."""
+        if self._ot is None or action or not name.strip() or any(c.isspace() for c in name):
+            self._ins(w, name, nick_tags)
+            self._ins(w, " " if action else ": ", ("msg",))
+            return
+        fg, fkey = self._tag_style(nick_tags)
+        nspec, npx, _ = self._ot_fonts[fkey]
+        mspec, mpx, _ = self._ot_fonts["msg"]
+        img = self._ot.image_parts(((name, fg, nspec, npx), (":", FG, mspec, mpx)))
+        if img is None:
+            self._ins(w, name, nick_tags)
+            self._ins(w, ": ", ("msg",))
+            return
+        self._put_img(w, img, nick_tags)
+        w.insert("end", " ", ("wgap",))
+
+    def _tag_style(self, tags):
+        """Цвет и шрифт текста по тегам — то же, что Tk применил бы к обычному тексту."""
+        colored = next((t for t in tags if len(t) == 8 and t[0] in "na" and t[1] == "#"), None)
+        if colored and colored[0] == "n" or "atbold" in tags:
+            fkey = "nick"
+        elif "hdrnick" in tags:
+            fkey = "small_b"
+        elif "firstlbl" in tags:
+            fkey = "tag"
+        elif "ts" in tags:
+            fkey = "ts"
+        elif "sys" in tags:
+            fkey = "sys"
+        elif "chip" in tags:
+            fkey = "chip"
+        elif "hdr" in tags:
+            fkey = "small"
+        else:
+            fkey = "msg"
+        if "link" in tags:
+            fg = LINK_FG
+        elif colored:
+            fg = colored[1:]
+        elif "firstlbl" in tags:
+            fg = FIRST_FG
+        elif "ts" in tags or "rpglyph" in tags:
+            fg = TS_FG
+        elif "chip" in tags:
+            fg = CHIP_FG
+        elif "sys" in tags or "hdr" in tags or "rdmcost" in tags:
+            fg = SYS_FG
+        else:
+            fg = FG
+        if fg in (SYS_FG, TS_FG):
+            # поверх игры приглушённый серый в тёмной обводке сливается — берём светлее
+            fg = _lighten(fg, 0.45)
+        return fg, fkey
+
+    def _ins_link(self, w, url, body_tag):
+        self._ins(w, url, (body_tag, "link"))
+        if self._ot is not None:
+            # картинки текста не отдают — сам адрес кладём рядом невидимым (для клика)
+            w.insert("end", url, ("link", "linkdata"))
 
     def _insert_body_text(self, w, part, body_tag):
         """Текст сообщения: ссылки кликабельные, @упоминания — жирные и кликабельные."""
@@ -5330,7 +6574,7 @@ class OverlayApp:
             if not piece:
                 continue
             if j % 2:  # нечётные куски — ссылки
-                w.insert("end", piece, (body_tag, "link"))
+                self._ins_link(w, piece, body_tag)
                 continue
             for i, chunk in enumerate(self._AT_RE.split(piece)):
                 if not chunk:
@@ -5338,13 +6582,13 @@ class OverlayApp:
                 if i % 2:  # нечётные куски — сами @упоминания
                     utag = self.user_tag(w, chunk[1:])
                     tags = (body_tag, "atbold", "nicklink") + ((utag,) if utag else ())
-                    w.insert("end", chunk, tags)
+                    self._ins(w, chunk, tags)
                 else:
-                    w.insert("end", chunk, body_tag)
+                    self._ins(w, chunk, (body_tag,))
 
     def _render_item(self, w, item, mention_hit=False):
         if item[0] == "sys":
-            w.insert("end", item[1] + "\n", "sys")
+            self._ins(w, item[1] + "\n", ("sys",))
             return
         if item[0] == "redeem":
             self._render_redeem(w, item)
@@ -5363,7 +6607,7 @@ class OverlayApp:
         pad = " " if (first or mention_hit or hl) else ""
         block_start = int(w.index("end-1c").split(".")[0])
         if first:
-            w.insert("end", T("first_msg") + "\n", "firstlbl")
+            self._ins(w, T("first_msg") + "\n", ("firstlbl",))
         if rw:
             w.insert("end", pad, "hdr")
             self._insert_reward_header(w, channel, name, rw)
@@ -5371,7 +6615,7 @@ class OverlayApp:
         if pad:
             w.insert("end", pad, "msg")
         t = time.localtime(extra.get("ts") or time.time())
-        w.insert("end", "%d:%02d " % (t.tm_hour, t.tm_min), "ts")
+        self._ins(w, "%d:%02d " % (t.tm_hour, t.tm_min), ("ts",))
         multi = len(self.cfg.get("channels") or []) > 1
         use_av = self.chan_avatars.get()
         # сообщение пришло из другого канала совместного чата — показываем его аватарку
@@ -5383,7 +6627,7 @@ class OverlayApp:
             if img is not None:
                 w.image_create("end", image=img, padx=3)
             else:
-                w.insert("end", "#%s " % channel, "chip")
+                self._ins(w, "#%s " % channel, ("chip",))
         elif src_av:
             img = self.cached_image("av:s:" + extra.get("src_room", ""), src_av)
             if img is not None:
@@ -5403,9 +6647,8 @@ class OverlayApp:
                 self._insert_mod_icon(w, kind, mtag)
         nick_tags = ((self.color_tag(w, color, name), "nicklink")
                      + ((utag,) if utag else ()) + ((mtag,) if mtag else ()))
-        w.insert("end", name, nick_tags)
+        self._ins_nick(w, name, nick_tags, action)
         body_tag = self.color_tag(w, color, name, body=True) if action else "msg"
-        w.insert("end", " " if action else ": ", "msg")
         if rp:
             self._reply_prefix(w, rp, segs)
         for seg in segs:
@@ -5417,7 +6660,7 @@ class OverlayApp:
                 if img is not None:
                     w.image_create("end", image=img, padx=2)
                 else:
-                    w.insert("end", alt, body_tag)
+                    self._ins(w, alt, (body_tag,))
         w.insert("end", "\n")
         # подложки — вместе с переводом строки, чтобы полоса шла на всю ширину
         block = ("%d.0" % block_start, "%d.0" % (line_no + 1))
@@ -5442,23 +6685,23 @@ class OverlayApp:
         line_no = int(w.index("end-1c").split(".")[0])
         w.insert("end", " ", "msg")   # зазор у цветной кромки
         t = time.localtime(info.get("ts") or time.time())
-        w.insert("end", "%d:%02d " % (t.tm_hour, t.tm_min), "ts")
+        self._ins(w, "%d:%02d " % (t.tm_hour, t.tm_min), ("ts",))
         if len(self.cfg.get("channels") or []) > 1 and w is self.texts.get("*"):
             av = info.get("av") if self.chan_avatars.get() else None
             img = self.cached_image("av:" + channel, av) if av else None
             if img is not None:
                 w.image_create("end", image=img, padx=3)
             else:
-                w.insert("end", "#%s " % channel, "chip")
+                self._ins(w, "#%s " % channel, ("chip",))
         if rw.get("icon"):
             img = self.cached_image(rw["key"], rw["icon"])
             if img is not None:
                 w.image_create("end", image=img, padx=2)
         utag = self.user_tag(w, login or name)
-        w.insert("end", name, (self.color_tag(w, info.get("color") or "", name), "nicklink")
-                 + ((utag,) if utag else ()))
-        w.insert("end", T("rdm_mid"), "msg")
-        w.insert("end", T("rdm_title", rw.get("title") or "?"), ("msg", "atbold"))
+        self._ins(w, name, (self.color_tag(w, info.get("color") or "", name), "nicklink")
+                  + ((utag,) if utag else ()))
+        self._ins(w, T("rdm_mid"), ("msg",))
+        self._ins(w, T("rdm_title", rw.get("title") or "?"), ("msg", "atbold"))
         cost = rw.get("cost")
         if cost:
             w.insert("end", "  ", "msg")
@@ -5467,7 +6710,7 @@ class OverlayApp:
                 pts = self._pts_photo
             if pts is not None:
                 w.image_create("end", image=pts, padx=1)
-            w.insert("end", "{:,}".format(int(cost)).replace(",", " "), "rdmcost")
+            self._ins(w, "{:,}".format(int(cost)).replace(",", " "), ("rdmcost",))
         w.insert("end", "\n")
         block = ("%d.0" % line_no, "%d.0" % (line_no + 1))
         w.tag_add("reward", *block)
@@ -5492,13 +6735,13 @@ class OverlayApp:
         if len(body) > 300:
             body = body[:299] + "…"
         w.insert("end", "%s@%s: %s" % (T("hdr_reply"), pname, body), "rpdata")
-        w.insert("end", "↩ ", "rpglyph")
+        self._ins(w, "↩ ", ("rpglyph",))
         head = segs[0][1].lower() if segs and segs[0][0] == "t" else ""
         if not (head.startswith("@" + plogin) or head.startswith("@" + pname.lower())):
             # «@ник» в начале стёрли — кому ответ, показываем сами
             utag = self.user_tag(w, plogin)
-            w.insert("end", "@" + pname, ("msg", "atbold", "nicklink") + ((utag,) if utag else ()))
-            w.insert("end", " ", "msg")
+            self._ins(w, "@" + pname, ("msg", "atbold", "nicklink") + ((utag,) if utag else ()))
+            self._ins(w, " ", ("msg",))
 
     def _reply_tip(self, w, e):
         """Подсказка с исходным сообщением при наведении на ответ."""
@@ -5556,12 +6799,12 @@ class OverlayApp:
             if img is not None:
                 w.image_create("end", image=img, padx=2)
         if rw.get("title"):
-            w.insert("end", T("rw_line", name, rw["title"]), "hdr")
+            self._ins(w, T("rw_line", name, rw["title"]), ("hdr",))
         else:
-            w.insert("end", T("rw_generic", name), "hdr")
+            self._ins(w, T("rw_generic", name), ("hdr",))
         cost = rw.get("cost")
         if cost:
-            w.insert("end", " · ", "hdr")
+            self._ins(w, " · ", ("hdr",))
             pts = None
             if rw.get("pts_b64"):
                 pts = self.cached_image("pts:" + channel, rw["pts_b64"])
@@ -5569,10 +6812,13 @@ class OverlayApp:
                 pts = self._pts_photo
             if pts is not None:
                 w.image_create("end", image=pts, padx=1)
-            w.insert("end", "{:,}".format(int(cost)).replace(",", " "), "hdr")
+            self._ins(w, "{:,}".format(int(cost)).replace(",", " "), ("hdr",))
         w.insert("end", "\n")
 
     def quit(self):
+        if self._bd is not None:
+            self._bd.destroy()
+            self._bd = None
         self.save_geometry()
         if self.irc:
             self.irc.stop()

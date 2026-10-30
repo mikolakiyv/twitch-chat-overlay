@@ -232,7 +232,7 @@
         </a>
         <a class="alt" href="https://github.com/mikolakiyv/twitch-chat-overlay/releases/latest/download/twitch-chat-overlay.zip">версия с исходниками .zip</a>
       </div>
-      <p class="meta"><span id="ver">v1.20.0</span> · 18 МБ · <b>без установки</b> · <b>обновляется сам</b> · Windows 10/11 · rus/eng</p>
+      <p class="meta"><span id="ver">v1.21.0</span> · 18 МБ · <b>без установки</b> · <b>обновляется сам</b> · Windows 10/11 · rus/eng</p>
     </div>
 
     <div class="scene" aria-hidden="true">
@@ -258,7 +258,7 @@
     <h2>Что умеет <em>оверлей</em></h2>
     <div class="grid">
       <div class="f" style="--c:var(--green)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M12 3l9 5-9 5-9-5 9-5z'/><path d='M3 13l9 5 9-5'/></svg></span><div><b>Поверх всего</b><p>Висит над любой игрой и программой. <kbd>F11</kbd> — во весь экран, «—» — свернуть. Обновляется сам.</p></div></div>
-      <div class="f" style="--c:var(--coral)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M5 5h14M12 5v14M8 19h8'/></svg></span><div><b>Только текст — <kbd>F9</kbd></b><p>Остаётся один текст чата. <kbd>Insert</kbd> — текст + поле ввода. <kbd>F8</kbd> — клики сквозь окно.</p></div></div>
+      <div class="f" style="--c:var(--coral)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M5 5h14M12 5v14M8 19h8'/></svg></span><div><b>Только текст — <kbd>F9</kbd></b><p>Один текст с обводкой — читается на любом фоне. <kbd>Insert</kbd> — текст + поле ввода. <kbd>F8</kbd> — клики сквозь окно.</p></div></div>
       <div class="f" style="--c:var(--accent)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x='3' y='4' width='18' height='16' rx='2'/><path d='M9 4v16M15 4v16'/></svg></span><div><b>Мультичат — <kbd>F10</kbd></b><p>Разворачивается в колонки — только каналы, которые сейчас в эфире (●).</p></div></div>
       <div class="f" style="--c:var(--pink)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx='12' cy='12' r='9'/><path d='M8.5 14s1.3 2 3.5 2 3.5-2 3.5-2M9 9.5h.01M15 9.5h.01'/></svg></span><div><b>Смайлы Twitch и 7TV</b><p>Анимированные двигаются. Пикер с поиском. В РФ работают без VPN.</p></div></div>
       <div class="f" style="--c:var(--blue)"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d='M21 12a8 8 0 0 1-8 8H8l-5 3 1.5-4.5A8 8 0 1 1 21 12z'/></svg></span><div><b>Как настоящий чат</b><p>Время у сообщений, значки, ответы одной строкой, награды за баллы; вас отметили — строка красная.</p></div></div>
@@ -273,6 +273,7 @@
     <h2>Что <em>нового</em></h2>
     <div class="how">
       <ol style="list-style:none; margin-left:0">
+        <li><b>v1.21</b> — прозрачный режим читается на любом фоне: обводка или тень у текста, подложка 0–90%, прозрачные поля ввода, выбор шрифта; настройки переделаны — всё на одном экране; чат не тормозит на многочасовых стримах</li>
         <li><b>v1.20</b> — видны все покупки наград за баллы, даже без текста: кто, какую и за сколько — строкой в цвет награды</li>
         <li><b>v1.19</b> — вид как у чата Twitch с 7TV: время у сообщений, красные упоминания, ответы одной строкой, плавная прокрутка и пауза, вкладки с аватарками и «+», шапка с эфиром</li>
         <li><b>v1.18.2</b> — хромакей для OBS без фиолетовой каймы на тексте: ключ стал тёмным (#0b0b10, сходство 10, сглаживание 5)</li>
@@ -306,9 +307,9 @@
         <figure class="sl" data-cap="Ответ одной строкой «↩ @ник», вас отметили — красная строка; покупка награды — строкой в цвет награды, даже без текста"><img src="screenshot_replies3.png" alt="Лента крупно: ответ одной строкой, красное упоминание, награда с текстом, покупка награды без текста, первое сообщение"><img class="bg" src="screenshot_replies3.png" alt="" aria-hidden="true"></figure>
         <figure class="sl" data-cap="«+» за вкладками: ссылка из буфера обмена уже вставлена — Enter, и чат открыт; избранное — в один клик"><img src="screenshot_add.png" alt="Окно добавления чата: вставленная ссылка на попаут-чат и избранные каналы"><img class="bg" src="screenshot_add.png" alt="" aria-hidden="true"></figure>
         <figure class="sl" data-cap="F10 — колонками только те, кто в эфире: «в эфире 3 из 4», у оффлайн-канала колонки нет"><img src="screenshot_multichat2.png" alt="Развёрнутый мультичат: три колонки живых каналов"><img class="bg" src="screenshot_multichat2.png" alt="" aria-hidden="true"></figure>
-        <figure class="sl" data-cap="F9 — только текст поверх игры: время, ответы и упоминания видны и тут"><img src="screenshot_textonly3.png" alt="Режим «только текст»: чат парит без рамки и фона"><img class="bg" src="screenshot_textonly3.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl" data-cap="F9 и Insert — прозрачный чат поверх игры: текст с обводкой читается даже на светлом, поле ввода тоже прозрачное"><img src="screenshot_transparent.png" alt="Прозрачный режим поверх светлой сцены: текст с тонкой обводкой и прозрачное поле ввода"><img class="bg" src="screenshot_transparent.png" alt="" aria-hidden="true"></figure>
         <figure class="sl" data-cap="Смайлы Twitch и 7TV с поиском — только те, что работают на выбранном канале"><img src="screenshot_picker2.png" alt="Пикер смайлов: поиск и сетка смайлов 7TV канала"><img class="bg" src="screenshot_picker2.png" alt="" aria-hidden="true"></figure>
-        <figure class="sl" data-cap="Все настройки на одном экране — и время сообщений, и иконки каналов, и автообновление"><img src="settings-panel2.png" alt="Панель настроек на одном экране"><img class="bg" src="settings-panel2.png" alt="" aria-hidden="true"></figure>
+        <figure class="sl" data-cap="Все настройки на одном экране: каналы и избранное, режимы с клавишами, вид, обводка и подложка прозрачного режима"><img src="settings-panel3.png" alt="Панель настроек: карточки «Каналы», «Окно и режимы», «Внешний вид», «Прозрачный режим», «Лента», «Аккаунт»"><img class="bg" src="settings-panel3.png" alt="" aria-hidden="true"></figure>
       </div>
       <p class="cap" id="cap">Как чат Twitch: вкладки с аватарками и «+», шапка с эфиром (● 3ч 7м · зрители · игра), время у сообщений</p>
       <div class="thumbs" role="tablist" aria-label="Скриншоты">
@@ -316,7 +317,7 @@
         <button class="th" type="button" role="tab" aria-selected="false">Ответы и упоминания</button>
         <button class="th" type="button" role="tab" aria-selected="false">Кнопка «+»</button>
         <button class="th" type="button" role="tab" aria-selected="false">Мультичат F10</button>
-        <button class="th" type="button" role="tab" aria-selected="false">Только текст F9</button>
+        <button class="th" type="button" role="tab" aria-selected="false">Прозрачный режим</button>
         <button class="th" type="button" role="tab" aria-selected="false">Пикер смайлов</button>
         <button class="th" type="button" role="tab" aria-selected="false">Настройки</button>
       </div>
