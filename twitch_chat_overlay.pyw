@@ -66,7 +66,7 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "overlay_config.json")
-APP_VERSION = "1.21.0"
+APP_VERSION = "1.21.1"
 GITHUB_REPO = "mikolakiyv/twitch-chat-overlay"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 # файл самой программы: exe или .pyw — обновление подменяет именно его
@@ -328,7 +328,9 @@ STRINGS = {
         "live_none": "Сейчас никто не стримит — показываю все каналы",
         "s_ghostinput": "Текст + поле ввода",
         "d_key_ghostinput": "Текст + поле ввода",
-        "ghostinput_on": "Прозрачный чат с полем ввода. %s — вернуть окно.",
+        "ghostinput_on": ("Прозрачный чат с полем ввода. Двигать и растягивать — ручки ✥ ⤢ "
+                          "справа сверху (наведите мышь). %s — вернуть окно."),
+        "handle_tt": "✥ — перетащить окно, ⤢ — изменить размер",
         "tt_emotes": "Смайлы (Twitch и 7TV)",
         "ep_search": "Поиск смайла…",
         "s_channels": "Каналы",
@@ -469,7 +471,8 @@ STRINGS = {
         "not_sent": "Не отправлено: нет соединения.",
         "clickthrough_on": "Сквозные клики ВКЛ: окно не ловит мышь. %s — выключить.",
         "clickthrough_hint": "  сквозные клики · %s",
-        "textonly_on": "Только текст чата. %s — вернуть окно.",
+        "textonly_on": ("Только текст чата. Двигать и растягивать — ручки ✥ ⤢ справа сверху "
+                        "(наведите мышь). %s — вернуть окно."),
         "bind_updated": "Бинд обновлён: %s → %s",
         "mentions_now": "Упоминания: @%s",
         "mentions_off": "Упоминания выключены",
@@ -547,7 +550,9 @@ STRINGS = {
         "live_none": "No one is live — showing all channels",
         "s_ghostinput": "Text + input box",
         "d_key_ghostinput": "Text + input box",
-        "ghostinput_on": "Transparent chat with the input box. %s — bring the window back.",
+        "ghostinput_on": ("Transparent chat with the input box. Move and resize with the ✥ ⤢ "
+                          "handles at the top right (hover the chat). %s — bring the window back."),
+        "handle_tt": "✥ drag the window, ⤢ resize it",
         "tt_emotes": "Emotes (Twitch & 7TV)",
         "ep_search": "Search emotes…",
         "s_channels": "Channels",
@@ -688,7 +693,8 @@ STRINGS = {
         "not_sent": "Not sent: no connection.",
         "clickthrough_on": "Click-through ON: window ignores mouse. %s — turn off.",
         "clickthrough_hint": "  click-through · %s",
-        "textonly_on": "Text-only mode. %s — bring the window back.",
+        "textonly_on": ("Text-only mode. Move and resize with the ✥ ⤢ handles at the top right "
+                        "(hover the chat). %s — bring the window back."),
         "bind_updated": "Hotkey updated: %s → %s",
         "mentions_now": "Mentions: @%s",
         "mentions_off": "Mentions disabled",
@@ -3404,6 +3410,22 @@ class OverlayApp:
                              cursor="size_nw_se", font=("Segoe UI", 9))
         self.grip.place(relx=1.0, rely=1.0, anchor="se")
 
+        # в F9/Insert полосы и уголка нет — при наведении мыши справа сверху всплывают
+        # ручки «перетащить» и «размер» (иначе окно не сдвинуть, пока не вернёшь рамку)
+        self._h_active = None
+        self._h_start = None
+        self._h_shown = False
+        self._h_idle = 0
+        self._h_hot = None
+        self.handle = tk.Canvas(root, highlightthickness=0, bd=0, bg=BG, cursor="fleur")
+        self.handle.bind("<ButtonPress-1>", self._h_press)
+        self.handle.bind("<B1-Motion>", self._h_motion)
+        self.handle.bind("<ButtonRelease-1>", self._h_release)
+        self.handle.bind("<Motion>", self._h_hover)
+        self.handle.bind("<Leave>", lambda e: self._h_draw(None))
+        Tooltip(self.handle, "handle_tt")
+        self._h_draw(None)
+
         # кнопка «вниз к новым сообщениям», появляется при прокрутке вверх
         self.newmsg_count = 0
         self.newmsg_btn = RoundButton(frame, "↓", command=self.jump_to_bottom,
@@ -5019,6 +5041,8 @@ class OverlayApp:
         for w in self.texts.values():
             w.configure(bg=color)
         self.grip.configure(bg=color)
+        self.handle.configure(bg=color)
+        self._h_draw(None)
         self.newmsg_btn.restyle(parent_bg=color)   # иначе в хромакее вокруг кнопки виден фон
 
     def _toggle_ts(self):
@@ -5262,6 +5286,7 @@ class OverlayApp:
             if not startup and msg_key:
                 self.sys_message(T(msg_key, key_name))
         else:
+            self._h_hide()
             self.frame.pack_configure(padx=1, pady=1)
             self.bar.pack(fill="x", before=self.feed_area)
             self.update_input_bar()
@@ -5295,6 +5320,7 @@ class OverlayApp:
             if self._key_pressed(self.cfg["key_ghostinput"]["vk"]):
                 self.ghost_input.set(not self.ghost_input.get())
                 self.apply_ghost_input()
+        self._poll_handle()
         self.root.after(120, self.poll_keys)
 
     def rebind_key(self, which, title, on_done=None):
@@ -5392,6 +5418,106 @@ class OverlayApp:
             save_config(self.cfg)
         except tk.TclError:
             pass
+
+    def _h_size(self):
+        sc = self._px_per_pt * 0.75
+        return int(round(26 * sc)), int(round(24 * sc)), sc
+
+    def _h_draw(self, hot):
+        """Пилюля с ручками: слева ✥ (перетащить), справа ⤢ (размер); hot — под мышью."""
+        self._h_hot = hot
+        cv = self.handle
+        bw, bh, sc = self._h_size()
+        try:
+            cv.configure(width=2 * bw, height=bh)
+            cv.delete("all")
+        except tk.TclError:
+            return
+        _pill(cv, 0, 0, 2 * bw - 1, bh - 1, BAR_BG)
+        cv.create_line(bw, int(6 * sc), bw, bh - int(6 * sc), fill=BORDER)
+        a, cy = 6.5 * sc, (bh - 1) / 2
+        lw = max(1.0, 1.5 * sc)
+        shape = (3.5 * sc, 3.5 * sc, 2.4 * sc)
+        cx = bw / 2 + 1
+        col = FG if hot == "move" else SYS_FG
+        cv.create_line(cx - a, cy, cx + a, cy, arrow="both", arrowshape=shape, width=lw, fill=col)
+        cv.create_line(cx, cy - a, cx, cy + a, arrow="both", arrowshape=shape, width=lw, fill=col)
+        cx, d = bw + bw / 2 - 1, a * 0.72
+        col = FG if hot == "size" else SYS_FG
+        cv.create_line(cx - d, cy + d, cx + d, cy - d, arrow="both", arrowshape=shape, width=lw, fill=col)
+
+    def _h_region(self, x):
+        return "move" if x < self._h_size()[0] else "size"
+
+    def _h_hover(self, e):
+        region = self._h_active or self._h_region(e.x)
+        if region != self._h_hot:
+            self.handle.configure(cursor="fleur" if region == "move" else "size_ne_sw")
+            self._h_draw(region)
+
+    def _h_press(self, e):
+        self._h_active = self._h_region(e.x)
+        self._h_start = (e.x_root, e.y_root, self.root.winfo_x(), self.root.winfo_y(),
+                         self.root.winfo_width(), self.root.winfo_height())
+
+    def _h_motion(self, e):
+        if not self._h_active:
+            return
+        x0, y0, rx, ry, w0, h0 = self._h_start
+        dx, dy = e.x_root - x0, e.y_root - y0
+        if self._h_active == "move":
+            self.root.geometry("+%d+%d" % (rx + dx, ry + dy))
+        else:
+            # ручка в правом верхнем углу: тянем вправо-вверх — шире и выше, низ стоит на месте
+            w = max(240, w0 + dx)
+            h = max(160, h0 - dy)
+            self.root.geometry("%dx%d+%d+%d" % (w, h, rx, ry + h0 - h))
+
+    def _h_release(self, e):
+        if self._h_active:
+            self._h_active = None
+            self.root.update_idletasks()   # новая геометрия применяется «в простое» — дождёмся
+            self.save_geometry()
+
+    def _cursor_pos(self):
+        pt = (ctypes.c_long * 2)()
+        try:
+            if self.user32 and self.user32.GetCursorPos(ctypes.byref(pt)):
+                return pt[0], pt[1]
+        except Exception:
+            pass
+        return None
+
+    def _poll_handle(self):
+        """Ручки видны, пока мышь над окном в F9/Insert. Прозрачные места окна событий мыши
+        не получают (клики идут в игру), поэтому смотрим, где курсор."""
+        want = bool(self._h_active)
+        if not want and self._is_bare() and not self.clickthrough.get() \
+                and not self.fullscreen and not self._minimized:
+            pos = self._cursor_pos()
+            if pos:
+                try:
+                    x, y = self.root.winfo_rootx(), self.root.winfo_rooty()
+                    w, h = self.root.winfo_width(), self.root.winfo_height()
+                except tk.TclError:
+                    return
+                want = x <= pos[0] < x + w and y <= pos[1] < y + h
+        if want:
+            self._h_idle = 0
+            if not self._h_shown:
+                m = int(round(6 * self._h_size()[2]))
+                self.handle.place(in_=self.root, relx=1.0, x=-m, y=m, anchor="ne")
+                tk.Misc.lift(self.handle)   # у Canvas свой lift() — для фигур на нём
+                self._h_shown = True
+        elif self._h_shown:
+            self._h_idle += 1
+            if self._h_idle >= 5 or not self._is_bare():   # ~0.6 с после ухода мыши
+                self._h_hide()
+
+    def _h_hide(self):
+        self.handle.place_forget()
+        self._h_shown = False
+        self._h_idle = 0
 
     def drag_start(self, e):
         self._drag = (e.x_root - self.root.winfo_x(), e.y_root - self.root.winfo_y())
