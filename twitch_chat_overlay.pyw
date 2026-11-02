@@ -66,7 +66,7 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "overlay_config.json")
-APP_VERSION = "1.21.1"
+APP_VERSION = "1.22.0"
 GITHUB_REPO = "mikolakiyv/twitch-chat-overlay"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 # файл самой программы: exe или .pyw — обновление подменяет именно его
@@ -331,6 +331,9 @@ STRINGS = {
         "ghostinput_on": ("Прозрачный чат с полем ввода. Двигать и растягивать — ручки ✥ ⤢ "
                           "справа сверху (наведите мышь). %s — вернуть окно."),
         "handle_tt": "✥ — перетащить окно, ⤢ — изменить размер",
+        "reply_tt": "Ответить",
+        "reply_to": "Ответ @%s:",
+        "reply_cancel_tt": "Не отвечать (Esc)",
         "tt_emotes": "Смайлы (Twitch и 7TV)",
         "ep_search": "Поиск смайла…",
         "s_channels": "Каналы",
@@ -553,6 +556,9 @@ STRINGS = {
         "ghostinput_on": ("Transparent chat with the input box. Move and resize with the ✥ ⤢ "
                           "handles at the top right (hover the chat). %s — bring the window back."),
         "handle_tt": "✥ drag the window, ⤢ resize it",
+        "reply_tt": "Reply",
+        "reply_to": "Replying to @%s:",
+        "reply_cancel_tt": "Cancel reply (Esc)",
         "tt_emotes": "Emotes (Twitch & 7TV)",
         "ep_search": "Search emotes…",
         "s_channels": "Channels",
@@ -2498,16 +2504,21 @@ class IrcThread(threading.Thread):
                 break
         self.q.put(item)
 
-    def send_message(self, channel, text):
-        """Отправка сообщения из UI-потока. True, если ушло в сокет."""
+    def send_message(self, channel, text, reply_id=""):
+        """Отправка сообщения из UI-потока. True, если ушло в сокет.
+        reply_id — id сообщения, на которое отвечаем (Twitch покажет ответ в ветке)."""
         if not self.token or not text:
             return False
-        text = text[:500]  # лимит Twitch на длину сообщения
+        # перевод строки в IRC — конец команды: в тексте его быть не должно
+        text = text.replace("\r", " ").replace("\n", " ")[:500]  # лимит Twitch — 500
+        tag = ""
+        if reply_id and re.fullmatch(r"[A-Za-z0-9-]{1,64}", reply_id):
+            tag = "@reply-parent-msg-id=%s " % reply_id
         try:
             with self.send_lock:
                 if not self.sock:
                     return False
-                self.sock.sendall(("PRIVMSG #%s :%s\r\n" % (channel, text)).encode("utf-8"))
+                self.sock.sendall(("%sPRIVMSG #%s :%s\r\n" % (tag, channel, text)).encode("utf-8"))
             return True
         except OSError:
             return False
@@ -3390,6 +3401,39 @@ class OverlayApp:
         self.entry.bind("<FocusIn>", self._ph_clear)
         self.entry.bind("<FocusOut>", lambda e: self._ph_set())
         self._ph_set()
+        self.entry.bind("<Escape>", lambda e: self.cancel_reply(), add="+")
+
+        # ответ на сообщение, как на Twitch: наведите на сообщение — справа «↩»; клик —
+        # над полем ввода полоса «↩ Ответ @ник: текст ✕», Enter отправляет ответ
+        self._reply_to = None   # (канал, id, имя, логин, текст)
+        self.reply_bar = tk.Frame(frame, bg=BAR_BG)
+        self.reply_x = tk.Label(self.reply_bar, text="✕", bg=BAR_BG, fg=SYS_FG, cursor="hand2",
+                                font=("Segoe UI", 9), padx=10)
+        self.reply_x.pack(side="right", fill="y")
+        self.reply_x.bind("<Button-1>", lambda e: self.cancel_reply())
+        self.reply_x.bind("<Enter>", lambda e: self.reply_x.configure(fg=FG))
+        self.reply_x.bind("<Leave>", lambda e: self.reply_x.configure(fg=SYS_FG))
+        Tooltip(self.reply_x, "reply_cancel_tt")
+        self.reply_icon = tk.Label(self.reply_bar, text="↩", bg=BAR_BG, fg=ACCENT,
+                                   font=("Segoe UI Symbol", 10))
+        self.reply_icon.pack(side="left", padx=(10, 4), pady=(4, 0))
+        self.reply_who = tk.Label(self.reply_bar, text="", bg=BAR_BG, fg=FG, font=self.font_small_b)
+        self.reply_who.pack(side="left", pady=(4, 0))
+        self.reply_body = tk.Label(self.reply_bar, text="", bg=BAR_BG, fg=SYS_FG,
+                                   font=self.font_small, anchor="w")
+        self.reply_body.pack(side="left", fill="x", expand=True, padx=(4, 0), pady=(4, 0))
+        self._rb_w = None       # лента, над сообщением которой сейчас «↩»
+        self._rb_tag = None     # тег этого сообщения (данные — в self._msg_meta)
+        self._rb_line = None
+        self._rb_shown = False
+        self._rb_hot = False    # мышь на самой кнопке — лента не едет
+        self._rb_hide_job = None
+        self._rb_tick_job = None
+        self.reply_btn = tk.Canvas(root, highlightthickness=0, bd=0, bg=BG, cursor="hand2")
+        self.reply_btn.bind("<Enter>", lambda e: self._rb_enter())
+        self.reply_btn.bind("<Leave>", lambda e: self._rb_leave())
+        self.reply_btn.bind("<Button-1>", lambda e: self._rb_click())
+        Tooltip(self.reply_btn, "reply_tt")
 
         # --- ленты чата: "*" — общий поток, плюс по одной на канал ---
         self.tab_bar = tk.Frame(frame, bg=BAR_BG)
@@ -4203,8 +4247,11 @@ class OverlayApp:
         if self.cfg.get("token") and self.cfg.get("login"):
             self.input_bar.pack(side="bottom", fill="x", before=self.feed_area)
             self.update_chan_btn()
+            if self._reply_to:
+                self.reply_bar.pack(side="bottom", fill="x", after=self.input_bar)
         else:
             self.input_bar.pack_forget()
+            self.cancel_reply()
         self.grip.lift()
         self._bd_schedule()
 
@@ -4220,6 +4267,9 @@ class OverlayApp:
             self.chan_btn.pack(side="left", padx=(6, 0), pady=5)
         else:
             self.chan_btn.pack_forget()
+        rp = getattr(self, "_reply_to", None)
+        if rp and (not chans or chans[self.send_index] != rp[0]):
+            self.cancel_reply()
         # пикер смайлов показывает набор выбранного канала — обновляем
         if getattr(self, "emote_win", None) is not None and self.emote_win.winfo_exists():
             self._ep_render()
@@ -4267,10 +4317,15 @@ class OverlayApp:
         chans = self.cfg.get("channels") or []
         if not text or not chans or not self.irc:
             return
-        channel = chans[min(self.send_index, len(chans) - 1)]
+        rp = self._reply_to if self._reply_to and self._reply_to[0] in chans else None
+        channel = rp[0] if rp else chans[min(self.send_index, len(chans) - 1)]
         irc = self.irc
-        if irc.send_message(channel, text):
+        if irc.send_message(channel, text, reply_id=rp[1] if rp else ""):
             self.entry.delete(0, "end")
+            self.cancel_reply()
+            extra = {"ts": time.time()}
+            if rp:
+                extra["reply"] = (rp[2], rp[3], rp[4])
 
             def build_echo():
                 # своё сообщение собираем как чужие: смайлы 7TV + значки из USERSTATE
@@ -4281,11 +4336,197 @@ class OverlayApp:
                 badges = resolve_badges(irc.badge_maps, channel, btag)
                 irc.put(("msg", channel, name, color, segs, False, badges,
                          (self.cfg.get("login") or "").lower(),
-                         self.cfg.get("user_id", ""), "", "", {"ts": time.time()}))
+                         self.cfg.get("user_id", ""), "", rp[3] if rp else "", extra))
 
             DOWNLOAD_POOL.submit(build_echo)
         else:
             self.sys_message(T("not_sent"))
+
+    # ---------- ответ на сообщение ----------
+
+    def _can_reply(self):
+        try:
+            bar = bool(self.input_bar.winfo_ismapped())
+        except tk.TclError:
+            bar = False
+        return bool(self.cfg.get("token") and self.cfg.get("login") and self.irc and bar
+                    and not self.clickthrough.get())
+
+    def _rb_target(self, w, x, y):
+        """Сообщение под точкой ленты: (тег, строка, верх строки на экране) или None.
+        Ответить можно только на сообщение с id (своё эхо его не имеет)."""
+        try:
+            idx = w.index("@%d,%d" % (x, y))
+            info = w.dlineinfo(idx)
+        except tk.TclError:
+            return None
+        if not info or not (info[1] <= y < info[1] + info[3]):
+            return None   # ниже последней строки
+        line = int(idx.split(".")[0])
+        # номер строки не кэшируем: когда старые строки срезаются, номера сдвигаются
+        try:
+            dump = w.dump("%d.0" % line, "%d.end" % line, tag=True)
+        except tk.TclError:
+            return None
+        tag = next((v for k, v, _ in dump
+                    if k == "tagon" and v.startswith("mm") and "." not in v), None)
+        meta = self._msg_meta.get(tag) if tag else None
+        if not meta or not meta[4]:
+            return None
+        try:
+            top = w.dlineinfo("%d.0" % line)
+        except tk.TclError:
+            top = None
+        return tag, line, top[1] if top else info[1]
+
+    def _rb_hover(self, w, e):
+        if self._rb_hot:
+            return
+        if not self._can_reply():
+            self._rb_hide()
+            return
+        t = self._rb_target(w, e.x, e.y)
+        if t is None:
+            self._rb_schedule_hide()
+            return
+        self._rb_cancel_hide()
+        tag, line, top = t
+        if self._rb_shown and self._rb_w is w and self._rb_tag == tag and self._rb_top == top:
+            return
+        self._rb_w, self._rb_tag, self._rb_line, self._rb_top = w, tag, line, top
+        self._rb_draw()
+        try:
+            self.reply_btn.place(in_=w, relx=1.0, x=-int(round(6 * self._px_per_pt * 0.75)),
+                                 y=max(0, top), anchor="ne")
+            tk.Misc.lift(self.reply_btn)   # у Canvas свой lift() — для фигур
+        except tk.TclError:
+            return
+        self._rb_shown = True
+        if self._rb_tick_job is None:
+            self._rb_tick_job = self.root.after(150, self._rb_tick)
+
+    def _rb_draw(self):
+        cv = self.reply_btn
+        sc = self._px_per_pt * 0.75
+        bw, bh = int(round(30 * sc)), int(round(22 * sc))
+        try:
+            bg = self._rb_w.cget("bg") if self._rb_w is not None else BG   # углы — цветом ленты
+            cv.configure(width=bw, height=bh, bg=bg)
+            cv.delete("all")
+        except tk.TclError:
+            return
+        _pill(cv, 0, 0, bw - 1, bh - 1, ACCENT if self._rb_hot else CHIPBTN_BG)
+        cv.create_text(bw / 2, bh / 2, text="↩", fill="#ffffff" if self._rb_hot else FG,
+                       font=("Segoe UI Symbol", 10))
+
+    def _rb_tick(self):
+        """Пока «↩» видна: лента могла уехать (новые сообщения, прокрутка) — кнопка
+        переезжает к сообщению под мышью или прячется."""
+        self._rb_tick_job = None
+        w = self._rb_w
+        if not self._rb_shown or w is None:
+            return
+        if not self._rb_hot:
+            try:
+                px, py = w.winfo_pointerxy()
+                x, y = px - w.winfo_rootx(), py - w.winfo_rooty()
+                inside = 0 <= x < w.winfo_width() and 0 <= y < w.winfo_height() \
+                    and bool(w.winfo_ismapped())
+            except tk.TclError:
+                inside = False
+            if not inside:
+                self._rb_hide()
+                return
+
+            class _At:
+                pass
+            ev = _At()
+            ev.x, ev.y = x, y
+            self._rb_hover(w, ev)
+        if self._rb_shown and self._rb_tick_job is None:
+            self._rb_tick_job = self.root.after(150, self._rb_tick)
+
+    def _rb_cancel_hide(self):
+        if self._rb_hide_job is not None:
+            try:
+                self.root.after_cancel(self._rb_hide_job)
+            except tk.TclError:
+                pass
+            self._rb_hide_job = None
+
+    def _rb_schedule_hide(self):
+        if self._rb_shown and self._rb_hide_job is None and not self._rb_hot:
+            self._rb_hide_job = self.root.after(250, self._rb_hide)
+
+    def _rb_hide(self):
+        self._rb_cancel_hide()
+        if self._rb_hot:
+            self._rb_release()
+        if self._rb_shown:
+            try:
+                self.reply_btn.place_forget()
+            except tk.TclError:
+                pass
+        self._rb_shown = False
+        self._rb_line = None
+
+    def _rb_enter(self):
+        self._rb_cancel_hide()
+        self._rb_hot = True
+        self._rb_draw()
+
+    def _rb_leave(self):
+        self._rb_release()
+        self._rb_draw()
+        self._rb_schedule_hide()
+
+    def _rb_release(self):
+        """Мышь ушла с «↩»: лента снова едет за новыми сообщениями."""
+        self._rb_hot = False
+        w = self._rb_w
+        try:
+            if w is not None and self._is_following(w) and w.yview()[1] < 0.999:
+                self._smooth_to_end(w)
+        except tk.TclError:
+            pass
+
+    def _rb_click(self):
+        tag = self._rb_tag
+        self._rb_hide()
+        if tag:
+            self.start_reply(tag)
+
+    def start_reply(self, tag):
+        """Ответ на сообщение: полоса «↩ Ответ @ник: текст ✕» над полем ввода."""
+        meta = self._msg_meta.get(tag)
+        chans = self.cfg.get("channels") or []
+        if not meta or not meta[4] or meta[0] not in chans or not self._can_reply():
+            return
+        channel, login, name, uid, mid = meta[:5]
+        body = re.sub(r"\s+", " ", meta[5] if len(meta) > 5 else "").strip()
+        self._reply_to = (channel, mid, name, login, body)
+        self.send_index = chans.index(channel)   # ответ уходит в канал сообщения
+        self.update_chan_btn()
+        for wdg in (self.reply_bar, self.reply_icon, self.reply_who, self.reply_body, self.reply_x):
+            wdg.configure(bg=BAR_BG)
+        self.reply_icon.configure(fg=ACCENT)
+        self.reply_who.configure(text=T("reply_to", name), fg=FG)
+        self.reply_body.configure(text=body[:200] + ("…" if len(body) > 200 else ""), fg=SYS_FG)
+        self.reply_x.configure(fg=SYS_FG)
+        self.reply_bar.pack(side="bottom", fill="x", after=self.input_bar)
+        self._ph_clear()
+        try:
+            self.entry.focus_force()
+        except tk.TclError:
+            pass
+        self._bd_schedule()
+
+    def cancel_reply(self, event=None):
+        if self._reply_to is None:
+            return
+        self._reply_to = None
+        self.reply_bar.pack_forget()
+        self._bd_schedule()
 
     def _send_channel(self):
         chans = self.cfg.get("channels") or []
@@ -5280,6 +5521,7 @@ class OverlayApp:
                 self.update_input_bar()   # поле ввода остаётся — можно писать
             else:
                 self.input_bar.pack_forget()
+                self.cancel_reply()
             if not self.ghost.get():
                 self.ghost.set(True)
             self.apply_look()
@@ -5872,7 +6114,8 @@ class OverlayApp:
             w.yview()
         except tk.TclError:
             return False
-        follow = self._is_following(w)
+        hold = self._rb_hot and self._rb_w is w
+        follow = self._is_following(w) and not hold
         w.configure(state="normal")
         hit_any = False
         try:
@@ -5907,7 +6150,8 @@ class OverlayApp:
                 self._smooth_to_end(w)
             else:
                 w.see("end")
-        elif visible and w is self.text and self.layout != "columns" and not self._is_bare():
+        elif visible and w is self.text and self.layout != "columns" and not self._is_bare() \
+                and not hold:
             # пользователь листает историю — счётчик новых снизу (одна лента)
             fresh = sum(1 for it, _ in flagged if it[0] in ("msg", "redeem"))
             if fresh:
@@ -6019,6 +6263,9 @@ class OverlayApp:
         w.tag_bind("rpline", "<Leave>", lambda e: self._reply_tip_hide())
         w.bind("<Button-3>", self.open_settings)
         w.bind("<MouseWheel>", lambda e, t=w: self._on_wheel(t, e), add="+")
+        w.bind("<MouseWheel>", lambda e: self._rb_hide(), add="+")
+        w.bind("<Motion>", lambda e, t=w: self._rb_hover(t, e), add="+")
+        w.bind("<Leave>", lambda e: self._rb_schedule_hide(), add="+")
         w._utags = set()   # кликабельные ники этой ленты
         w._ctags = set()   # цветовые теги этой ленты
         w._follow = True   # лента едет за новыми сообщениями; прокрутили вверх — пауза
@@ -6437,14 +6684,14 @@ class OverlayApp:
         except tk.TclError:
             pass
 
-    def msg_meta_tag(self, w, channel, login, name, uid, mid):
-        """Тег с данными сообщения: правый клик по нику -> карточка действий."""
+    def msg_meta_tag(self, w, channel, login, name, uid, mid, body=""):
+        """Тег с данными сообщения: правый клик по нику -> карточка действий; «↩» — ответ."""
         if not login:
             return None
         self._msg_seq += 1
         tag = "mm%d" % self._msg_seq
         w._mtags.append(tag)
-        self._msg_meta[tag] = (channel, login, name, uid, mid)
+        self._msg_meta[tag] = (channel, login, name, uid, mid, body)
         if len(self._msg_meta) > 900:
             for k in list(self._msg_meta)[:300]:
                 self._msg_meta.pop(k, None)
@@ -6478,7 +6725,7 @@ class OverlayApp:
         meta = self._msg_meta.get(tag)
         if not meta:
             return "break"
-        channel, login, name, uid, mid = meta
+        channel, login, name, uid, mid = meta[:5]
         if self._action_win is not None:
             try:
                 self._action_win.destroy()
@@ -6539,7 +6786,7 @@ class OverlayApp:
         meta = self._msg_meta.get(mtag)
         if not meta:
             return
-        channel, login, name, uid, mid = meta
+        channel, login, name, uid, mid = meta[:5]
         if kind == "ban":
             key = channel + "/" + login
             if key not in self._armed_bans:
@@ -6763,7 +7010,8 @@ class OverlayApp:
             if bimg is not None:
                 w.image_create("end", image=bimg, padx=2)
         utag = self.user_tag(w, login or name)
-        mtag = self.msg_meta_tag(w, channel, login or name.lower(), name, uid, mid)
+        mtag = self.msg_meta_tag(w, channel, login or name.lower(), name, uid, mid,
+                                 "".join(sg[1] if sg[0] == "t" else sg[3] for sg in segs))
         # мод-иконки перед сообщением, как в мод-виде Twitch: бан/таймаут/варн/удалить
         if (mtag and uid and self.mod_icons.get() and self._is_mod(channel)
                 and (login or name.lower()) != (self.cfg.get("login") or "").lower()):
